@@ -1,0 +1,15 @@
+# Finora .gitattributes
+# Store text files with LF line endings inside Git, and check them out
+# with the normal Windows ending (CRLF) on this computer.
+* text=auto
+
+# Windows batch scripts must always keep CRLF line endings.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files: Git must never change their bytes.
+*.docx binary
+*.pdf  binary
+*.png  binary
+*.jpg  binary
+*.ico  binary
