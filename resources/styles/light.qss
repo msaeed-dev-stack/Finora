@@ -1,0 +1,102 @@
+/* =====================================================================
+   light.qss - Finora light theme
+
+   A Qt style sheet works like CSS on a web page. Each rule picks some
+   widgets and sets their colours, spacing and corners.
+     QLabel#pageTitle  means: the QLabel whose objectName is "pageTitle".
+   Colours are hex codes. #16A34A is Finora green.
+   ===================================================================== */
+
+/* ---- Window background ---- */
+QMainWindow,
+QStackedWidget#pageStack {
+    background-color: #F5F7FA;
+}
+
+/* ---- Sidebar ---- */
+QFrame#sidebar {
+    background-color: #FFFFFF;
+    border: none;
+    border-right: 1px solid #E5E7EB;
+}
+
+QLabel#brandName {
+    color: #111827;
+    font-size: 17pt;
+    font-weight: 700;
+}
+
+QLabel#brandTagline {
+    color: #6B7280;
+    font-size: 8pt;
+}
+
+QPushButton#navButton {
+    text-align: left;
+    padding: 9px 12px;
+    border: none;
+    border-radius: 8px;
+    outline: none;
+    background-color: transparent;
+    color: #374151;
+    font-size: 10pt;
+}
+
+QPushButton#navButton:hover {
+    background-color: #F0FDF4;
+    color: #15803D;
+}
+
+/* Keyboard focus on a button that is not selected (Tab key). */
+QPushButton#navButton:focus:!checked:!hover {
+    background-color: #F3F4F6;
+}
+
+/* The selected page: green button with white text and icon. */
+QPushButton#navButton:checked {
+    background-color: #16A34A;
+    color: #FFFFFF;
+    font-weight: 600;
+}
+
+QLabel#sidebarFooter {
+    color: #9CA3AF;
+    font-size: 8pt;
+    padding-left: 6px;
+}
+
+/* ---- Page header ---- */
+QLabel#pageTitle {
+    color: #111827;
+    font-size: 19pt;
+    font-weight: 700;
+}
+
+QLabel#pageSubtitle {
+    color: #6B7280;
+    font-size: 10pt;
+}
+
+/* ---- Cards: white boxes with rounded corners ---- */
+QFrame#card {
+    background-color: #FFFFFF;
+    border: 1px solid #E5E7EB;
+    border-radius: 12px;
+}
+
+/* ---- "Coming in Milestone N" card ---- */
+QLabel#emptyIcon {
+    background-color: #16A34A;
+    border-radius: 18px;
+}
+
+QLabel#emptyTitle {
+    color: #111827;
+    font-size: 13pt;
+    font-weight: 600;
+}
+
+QLabel#emptyText {
+    color: #6B7280;
+    font-size: 10pt;
+}
