@@ -9,8 +9,10 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QSqlDatabase>
 #include <QSqlQuery>
+#include <QSysInfo>
 #include <QTemporaryDir>
 #include <QVariant>
 
@@ -19,6 +21,7 @@
 
 #include "core/Transaction.h"
 #include "database/DatabaseManager.h"
+#include "database/InstanceLock.h"
 
 // Counts how many checks ran and how many of them failed.
 struct TestCounter {
@@ -456,6 +459,66 @@ void testDatabaseRules(TestCounter &counter, const QString &folder)
           queryNumber(name, "SELECT COUNT(*) FROM transactions") == 1);
 }
 
+// The single-instance lock that main() takes before opening the database.
+// Two InstanceLock objects for the same file behave like two copies of
+// Finora: the second one must be refused while the first holds the lock.
+void testInstanceLock(TestCounter &counter, const QString &folder)
+{
+    check(counter, "the lock file sits next to the database",
+          InstanceLock::lockPathFor(folder + "/data/finora.db") == folder + "/data/finora.lock",
+          InstanceLock::lockPathFor(folder + "/data/finora.db"));
+    check(counter, "no database path gives no lock path", InstanceLock::lockPathFor("").isEmpty());
+
+    // The data folder does not exist yet, as on the very first start.
+    QString lockPath = folder + "/lock_test/finora.lock";
+    {
+        InstanceLock first(lockPath);
+        check(counter, "the first copy gets the lock", first.tryLock(), first.lastError());
+        check(counter, "the lock file now exists", QFileInfo::exists(lockPath));
+        check(counter, "asking again from the same copy still succeeds",
+              first.tryLock() && first.isLocked(), first.lastError());
+
+        InstanceLock second(lockPath);
+        check(counter, "a second copy is refused while the first one runs", !second.tryLock());
+        check(counter, "the second copy knows another copy holds the lock",
+              second.heldByAnotherCopy() && !second.isLocked());
+        showMessage(second.lastError());
+        check(counter, "the first copy still holds the lock", first.isLocked());
+    }   // `first` is destroyed here and releases the lock (RAII)
+
+    check(counter, "the lock file is deleted when the first copy closes",
+          !QFileInfo::exists(lockPath));
+    {
+        InstanceLock later(lockPath);
+        check(counter, "a new copy gets the lock after the first one closed",
+              later.tryLock(), later.lastError());
+    }
+
+    // A lock file left behind by a crash: it names a program that is no
+    // longer running. 999999 is not a running program's number (Windows
+    // numbers are always multiples of 4). Qt reads this file and sees
+    // that the lock was abandoned.
+    QString crashedPath = folder + "/crashed.lock";
+    writeFile(crashedPath, "999999\nFinora\n" + QSysInfo::machineHostName().toUtf8() + "\n");
+    {
+        InstanceLock afterCrash(crashedPath);
+        check(counter, "a lock left behind by a crash is taken over",
+              afterCrash.tryLock(), afterCrash.lastError());
+    }
+
+    // A FILE sits where the data folder should be, so no lock file can
+    // be created. This is a real error, not "already running".
+    QString blocker = folder + "/lock_blocker";
+    writeFile(blocker, "This file sits where a folder is needed.");
+    {
+        InstanceLock blocked(blocker + "/finora.lock");
+        check(counter, "a lock file that cannot be created is refused", !blocked.tryLock());
+        check(counter, "that failure is not reported as \"already running\"",
+              !blocked.heldByAnotherCopy());
+        showMessage(blocked.lastError());
+    }
+}
+
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
@@ -486,6 +549,7 @@ int main(int argc, char *argv[])
     testOpenFailures(counter, folder);
     testPersistence(counter, folder);
     testDatabaseRules(counter, folder);
+    testInstanceLock(counter, folder);
 
     std::cout << "---------------------\n";
     std::cout << counter.checksRun << " checks, " << counter.checksFailed << " failed\n";

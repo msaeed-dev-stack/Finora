@@ -46,7 +46,7 @@ Finora is an offline desktop program that records income and expenses, compares 
 | Saving and reading transactions in the database (no screen for it yet) | Done in Milestone 2 |
 | Clear error dialog if the database cannot be opened | Done in Milestone 2 |
 | Automated core, interface and database tests | Done in Milestones 1 and 2 |
-| Allow only one running copy of Finora, using Qt's QLockFile | Planned: first task of Milestone 3, before any screen can edit or save |
+| Allow only one running copy of Finora, using Qt's QLockFile | Done: first task of Milestone 3 |
 | Transactions screen: add, edit, delete, search and filter | Planned: Milestone 3 |
 | Dashboard summaries, monthly category budgets and alerts | Planned: Milestone 4 |
 | Savings goals; PKR, USD and EUR with manual exchange rates | Planned: Milestone 5 |
@@ -107,6 +107,7 @@ To open that folder, press **Win + R**, type `%LOCALAPPDATA%\Finora` and press E
 - **Restore:** close Finora, then copy your backup over `finora.db`.
 - **Start with an empty database:** close Finora and delete `finora.db`. A new, empty one is created at the next start. This permanently deletes all records.
 - **Look inside:** close Finora and open `finora.db` in any SQLite viewer, such as the free DB Browser for SQLite.
+- **`finora.lock`:** while Finora is open, this small file in the same folder marks the database as in use. A second copy of Finora sees it, says Finora is already open, and closes. Finora deletes the file when it closes. After a crash the file may stay behind; the next start sees that the old copy is no longer running and takes the lock over, so you never need to delete it yourself.
 - **If the file cannot be opened:** Finora shows the file path and the reason, then closes with exit code 1. It never runs without saving.
 
 The automated tests never use this file. They work in a temporary folder that is deleted when they finish.
@@ -119,7 +120,7 @@ Database design, schema and versioning are explained in [docs/DESIGN.md](docs/DE
 |---|---|---|
 | `finora_tests` | Greeting, leap years, days per month, real calendar dates, currencies, transaction validation | 59 of 59 checks pass |
 | `finora_ui_tests` | The real main window: 7 pages, 7 buttons, starts on the dashboard, every button opens its own page and is the only one selected | 22 of 22 checks pass |
-| `finora_db_tests` | Real SQLite files: creating and reopening the database, saving and reading, punctuation and Urdu text, invalid data, error messages, open failures, data kept after closing, SQLite's own rules | 62 of 62 checks pass |
+| `finora_db_tests` | Real SQLite files: creating and reopening the database, saving and reading, punctuation and Urdu text, invalid data, error messages, open failures, data kept after closing, SQLite's own rules, only one running copy | 75 checks; run `build.bat` to confirm on Windows |
 
 Run a test program directly to see every check:
 
@@ -140,7 +141,8 @@ Finora/
 │   │   ├── Greeting.h/.cpp        Time-of-day greeting
 │   │   └── Transaction.h/.cpp     Transaction record, currencies, validation, dates
 │   ├── database/              All SQL lives here
-│   │   └── DatabaseManager.h/.cpp Open SQLite, create tables, save and read
+│   │   ├── DatabaseManager.h/.cpp Open SQLite, create tables, save and read
+│   │   └── InstanceLock.h/.cpp    Let only one copy of Finora run at a time
 │   └── ui/                    Qt Widgets user interface
 │       ├── MainWindow.h/.cpp      Window: sidebar and page area
 │       ├── Sidebar.h/.cpp         Logo and navigation buttons
@@ -171,4 +173,4 @@ Finora/
 - Light theme only.
 - The build paths assume Qt is installed in `C:\Qt`.
 - The greeting is chosen when the window opens and does not change while the window stays open.
-- Nothing stops two copies of Finora from running at the same time yet. SQLite lets only one program write to the database at a time. In tests where two programs saved at the same moment, saving became very slow and some saves were rejected with a "database is locked" error. A save that cannot get the lock within about 6 seconds is rejected and not stored. Those tests found no damaged data, but they do not prove that every way of using two copies is safe, so use one Finora window at a time. Details are in [docs/DESIGN.md](docs/DESIGN.md), section 7.9.
+- Only one copy of Finora can run at a time, because SQLite lets only one program write to the database at once. A second copy says Finora is already open and closes. This is checked per Windows user account; two different Windows users have separate data folders and separate databases. Details are in [docs/DESIGN.md](docs/DESIGN.md), section 7.9.

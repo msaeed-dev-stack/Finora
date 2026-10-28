@@ -27,7 +27,7 @@ Last updated: Milestone 2, 28 October 2026.
 | SQLite database, schema version 1, error handling, data kept after restart | 2 | Done |
 | Database location in AppLocalDataLocation; path can be given for tests | 2 | Done |
 | SQLite driver deployed next to `Finora.exe` | 2 | Done |
-| Single-instance guard with Qt's `QLockFile`, added before any screen can edit or save | 3, first task | **Planned — Not Yet Implemented** |
+| Single-instance guard with Qt's `QLockFile`, added before any screen can edit or save | 3, first task | Done: `InstanceLock` in `main.cpp`, tested in `finora_db_tests` |
 | Add, edit, delete, list, search and filter transactions on screen, with validation | 3 | **Planned — Not Yet Implemented** |
 | Dashboard summaries per currency with checked totals; recent transactions | 4 | **Planned — Not Yet Implemented** |
 | Monthly category budgets as schema version 2, 80% warning and 100% alert | 4 | **Planned — Not Yet Implemented** |

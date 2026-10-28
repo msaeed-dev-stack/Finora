@@ -266,7 +266,7 @@ RETURN true
 
 ### 7.9 Two copies of Finora at the same time
 
-Nothing stops a second copy of Finora from opening the same database yet. SQLite lets several programs read the file, but only one can write at a time. A program that wants to write while another holds the write lock must wait, and Qt's SQLite driver gives up after a timeout.
+Before the single-instance guard below existed, nothing stopped a second copy of Finora from opening the same database. SQLite lets several programs read the file, but only one can write at a time. A program that wants to write while another holds the write lock must wait, and Qt's SQLite driver gives up after a timeout.
 
 Measured on 28 October 2026 with temporary databases and Finora's real `DatabaseManager`:
 
@@ -279,7 +279,24 @@ Measured on 28 October 2026 with temporary databases and Finora's real `Database
 
 A rejected save is not stored: `addTransaction` returns `false` and `lastError()` holds the reason. No test damaged a database, but these tests do not prove that every way of using two copies is safe.
 
-**Planned — Not Yet Implemented (first task of Milestone 3, before any screen can edit or save):** a single-instance guard. Before opening the database, `main()` will lock a file named `finora.lock` in the data folder with Qt's `QLockFile`. If another copy of Finora holds the lock, Finora will say that it is already open and exit. SQLite's journal mode stays at its default, and no retry framework is added.
+**Single-instance guard (done, first task of Milestone 3).** `src/database/InstanceLock.h/.cpp` wraps Qt's `QLockFile`. Before opening the database, `main()` locks a file named `finora.lock` in the same folder as `finora.db`:
+
+```text
+lock = InstanceLock(folder of finora.db + "/finora.lock")
+IF lock.tryLock() fails THEN
+    IF another copy holds it THEN show "Finora is already open"
+    ELSE show the database error dialog with the reason
+    EXIT with code 1
+open the database, show the window ...
+```
+
+- `tryLock(0)` tries once and does not wait, so a second copy closes at once instead of hanging.
+- `setStaleLockTime(0)` switches off Qt's default rule that a lock older than 30 seconds is abandoned. Without it, a second copy started 30 seconds after the first would take the lock away from a Finora that is still open.
+- A lock left behind by a crash is still taken over, because `QLockFile` writes the program's process number into the file and checks whether that program is still running.
+- `instanceLock` is declared before `database` in `main()`, so C++ destroys it after the database is closed: the lock is never released while the database is still open (RAII).
+- The data folder is per Windows user, so the guard stops two copies for the same user. Two different users have separate databases and do not block each other.
+
+SQLite's journal mode stays at its default, and no retry framework is added. `finora_db_tests` checks the guard: a second lock on the same file is refused with "already running", the file disappears when the first lock is released, a lock from a program that is no longer running is taken over, and a lock file that cannot be created is reported as an error, not as "already running".
 
 ## 8. Validation algorithms
 

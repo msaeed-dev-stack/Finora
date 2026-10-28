@@ -47,13 +47,17 @@ target_include_directories(finora_core PUBLIC src)
 target_compile_options(finora_core PRIVATE ${FINORA_WARNINGS})
 
 # =====================================================================
-#  2. finora_database - every SQL statement in Finora lives here.
+#  2. finora_database - every SQL statement in Finora lives here,
+#     together with the lock that lets only one copy of Finora use
+#     the database at a time.
 #     Qt SQL is linked PRIVATE: code that uses this library does not
-#     see any SQL classes, only DatabaseManager.
+#     see any SQL classes, only DatabaseManager and InstanceLock.
 # =====================================================================
 add_library(finora_database STATIC
     src/database/DatabaseManager.h
     src/database/DatabaseManager.cpp
+    src/database/InstanceLock.h
+    src/database/InstanceLock.cpp
 )
 target_include_directories(finora_database PUBLIC src)
 target_link_libraries(finora_database

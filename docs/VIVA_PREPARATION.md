@@ -333,7 +333,7 @@ Last updated: Milestone 2, 28 October 2026.
 |---|---|---|
 | `finora_tests` | Greeting, leap years, days per month, 17 dates, currencies, validation | 59 of 59 pass |
 | `finora_ui_tests` | The real window and all 7 buttons | 22 of 22 pass |
-| `finora_db_tests` | Real SQLite files: creation, reopening, saving, reading, punctuation, Urdu text, invalid data, errors, open failures, persistence, SQLite rules | 62 of 62 pass |
+| `finora_db_tests` | Real SQLite files: creation, reopening, saving, reading, punctuation, Urdu text, invalid data, errors, open failures, persistence, SQLite rules, single-instance lock | 75 checks |
 
 ### G5. What edge cases did you consider?
 - **Short answer:** Boundaries and unusual but valid input.
@@ -452,7 +452,7 @@ See `docs/CPP_CONCEPTS_MAP.md`.
 - **Short answer:** Qt Charts is deprecated since Qt 6.10. Simple charts will be drawn with a few loops. **Planned — Not Yet Implemented** (Milestones 4 and 6).
 
 ### I7. What limitations remain?
-No transaction screen yet; no budgets, goals or exchange rates in the database yet; light theme only; build paths assume `C:\Qt`; nothing stops two copies of Finora running at once, and saving from both at the same time can be very slow or rejected with a "database is locked" error. A single-instance guard is the first task of Milestone 3.
+No transaction screen yet; no budgets, goals or exchange rates in the database yet; light theme only; build paths assume `C:\Qt`. Only one copy of Finora can run at a time; a second copy says Finora is already open and closes.
 
 ### I8. What would you improve in a future version?
 Answer this after the project is complete.
@@ -472,7 +472,7 @@ Answer this after the project is complete.
 - **"What happens if the power fails while the tables are being created?"** Creation runs inside one database transaction, so SQLite keeps either all of it or none of it.
 - **"Why store the date as text?"** The ISO form YYYY-MM-DD sorts correctly as text, and SQLite's `date()` function understands it, which the CHECK rule uses.
 - **"Why does `open()` not happen in the constructor?"** Opening can fail. A constructor cannot return `false`, but `open()` can.
-- **"What if two copies of Finora run at once?"** Both can open the file, and nothing stops a second copy yet. SQLite allows only one program to write at a time, so when both save at the same moment one of them must wait. In my tests, saving became very slow and some saves were rejected with a "database is locked" error; a save that cannot get the lock within about 6 seconds is rejected and not stored. The tests found no damaged data, but that does not prove every way of using two copies is safe. The planned fix, the first task of Milestone 3, is a single-instance guard using Qt's `QLockFile`, so only one copy of Finora can run. **Planned — Not Yet Implemented.**
+- **"What if two copies of Finora run at once?"** It cannot happen. Before opening the database, `main()` locks `finora.lock` with Qt's `QLockFile` through my `InstanceLock` class. A second copy finds the lock taken, says Finora is already open, and closes. I added this because SQLite allows only one program to write at a time: in my tests, two programs saving at once became very slow and some saves were rejected with "database is locked". If Finora crashes, the lock file stays, but `QLockFile` sees that the program which wrote it is no longer running and the next start takes it over. I set the stale lock time to 0, because Qt's default would treat a lock older than 30 seconds as abandoned, even while Finora is still open.
 - **"Why `AUTOINCREMENT`?"** So an id is never reused after a deletion.
 - **"Can an apostrophe break your SQL?"** No. Values are bound to placeholders, never glued into the SQL text; the test proves it.
 
