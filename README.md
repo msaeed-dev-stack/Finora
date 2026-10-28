@@ -2,9 +2,9 @@
 
 **Your Money. Your Control.**
 
-Finora is a desktop personal finance and budget management application for Windows. It is written in C++17 with Qt 6 Widgets and is being built as a Programming Fundamentals semester project.
+Finora is a desktop personal finance and budget management application for Windows. It is written in C++17 with Qt 6 Widgets and SQLite, and is being built as a Programming Fundamentals semester project.
 
-> **Current status: Milestone 1 of 7.** The main window, sidebar navigation, visual theme and automated tests work. The finance features are planned and are **not yet implemented**. Each page in the program says which milestone will add its feature.
+> **Current status: Milestone 2 of 7.** The main window, sidebar navigation, visual theme, SQLite database and automated tests work. The finance screens are planned and are **not yet implemented**. Each page in the program says which milestone will add its feature.
 
 ## Student details
 
@@ -41,9 +41,13 @@ Finora is an offline desktop program that records income and expenses, compares 
 | Main window with sidebar navigation for 7 pages | Done in Milestone 1 |
 | Light theme with hand-drawn icons | Done in Milestone 1 |
 | Time-of-day greeting on the dashboard | Done in Milestone 1 |
-| Automated core and interface tests | Done in Milestone 1 |
-| SQLite database that keeps data after closing | Planned: Milestone 2 |
-| Add, edit, delete, search and filter transactions | Planned: Milestone 3 |
+| SQLite database created automatically, kept after closing | Done in Milestone 2 |
+| Transaction validation: amount, currency, type, category, real calendar date | Done in Milestone 2 |
+| Saving and reading transactions in the database (no screen for it yet) | Done in Milestone 2 |
+| Clear error dialog if the database cannot be opened | Done in Milestone 2 |
+| Automated core, interface and database tests | Done in Milestones 1 and 2 |
+| Allow only one running copy of Finora, using Qt's QLockFile | Planned: first task of Milestone 3, before any screen can edit or save |
+| Transactions screen: add, edit, delete, search and filter | Planned: Milestone 3 |
 | Dashboard summaries, monthly category budgets and alerts | Planned: Milestone 4 |
 | Savings goals; PKR, USD and EUR with manual exchange rates | Planned: Milestone 5 |
 | Reports and CSV export | Planned: Milestone 6 |
@@ -52,7 +56,7 @@ Finora is an offline desktop program that records income and expenses, compares 
 ## Requirements to build
 
 - Windows 10 or 11, 64-bit
-- Qt 6.12.0 for MinGW 64-bit, installed at `C:\Qt\6.12.0\mingw_64`
+- Qt 6.12.0 for MinGW 64-bit, installed at `C:\Qt\6.12.0\mingw_64`, including the Qt SQL module and its SQLite driver
 - MinGW 13.1.0 64-bit, installed with Qt at `C:\Qt\Tools\mingw1310_64`
 - CMake 3.30 and Ninja, installed with Qt in `C:\Qt\Tools`
 
@@ -62,7 +66,7 @@ An older GCC 6.3 in `C:\MinGW\bin` cannot build Qt 6 programs. The build files a
 
 ## Build and run
 
-**Easiest way.** Double-click `build.bat`, or run it from a terminal in the project folder. It configures, builds and runs the tests:
+**Easiest way.** Double-click `build.bat`, or run it from a terminal in the project folder. It configures, builds and runs all tests:
 
 ```bat
 build.bat
@@ -74,7 +78,7 @@ Then start the program by double-clicking `build\debug\Finora.exe`, or from the 
 build\debug\Finora.exe
 ```
 
-After every build, `windeployqt` copies the Qt DLLs, plugins and MinGW runtime next to `Finora.exe`, so it runs without Qt on the PATH.
+After every build, `windeployqt` copies the Qt DLLs, plugins, the SQLite driver and the MinGW runtime next to `Finora.exe`, so it runs without Qt on the PATH. Close Finora before building again, because Windows cannot replace a running `.exe` file.
 
 **Step by step in PowerShell:**
 
@@ -88,30 +92,55 @@ ctest --preset debug           # 3. run the automated tests
 
 For an optimised build, use `release` instead of `debug`, or run `build.bat release`.
 
+## Data storage, backup and reset
+
+Finora keeps all its data in one SQLite database file:
+
+```text
+C:\Users\<your user name>\AppData\Local\Finora\finora.db
+```
+
+To open that folder, press **Win + R**, type `%LOCALAPPDATA%\Finora` and press Enter.
+
+- **First start:** Finora creates the folder, the file and its tables automatically.
+- **Back up:** close Finora, then copy `finora.db` to a safe place such as a USB drive.
+- **Restore:** close Finora, then copy your backup over `finora.db`.
+- **Start with an empty database:** close Finora and delete `finora.db`. A new, empty one is created at the next start. This permanently deletes all records.
+- **Look inside:** close Finora and open `finora.db` in any SQLite viewer, such as the free DB Browser for SQLite.
+- **If the file cannot be opened:** Finora shows the file path and the reason, then closes with exit code 1. It never runs without saving.
+
+The automated tests never use this file. They work in a temporary folder that is deleted when they finish.
+
+Database design, schema and versioning are explained in [docs/DESIGN.md](docs/DESIGN.md), section 7.
+
 ## Automated tests
 
-| Test program | What it checks | Last result, 27 Oct 2026 |
+| Test program | What it checks | Last result, 28 Oct 2026 |
 |---|---|---|
-| `finora_tests` | `greetingForHour()` at every boundary hour and for invalid hours | 11 of 11 checks pass |
+| `finora_tests` | Greeting, leap years, days per month, real calendar dates, currencies, transaction validation | 59 of 59 checks pass |
 | `finora_ui_tests` | The real main window: 7 pages, 7 buttons, starts on the dashboard, every button opens its own page and is the only one selected | 22 of 22 checks pass |
+| `finora_db_tests` | Real SQLite files: creating and reopening the database, saving and reading, punctuation and Urdu text, invalid data, error messages, open failures, data kept after closing, SQLite's own rules | 62 of 62 checks pass |
 
 Run a test program directly to see every check:
 
 ```powershell
-.\build\debug\finora_tests.exe
+.\build\debug\finora_db_tests.exe
 ```
 
 ## Project structure
 
 ```text
 Finora/
-├── CMakeLists.txt             Build script: programs, library and tests
+├── CMakeLists.txt             Build script: programs, libraries and tests
 ├── CMakePresets.json          Qt and compiler paths for debug and release builds
 ├── build.bat                  One-click build and test script
 ├── src/
-│   ├── main.cpp               Program entry point
+│   ├── main.cpp               Program entry point: theme, database, window
 │   ├── core/                  Plain C++ logic without Qt, tested directly
-│   │   └── Greeting.h/.cpp        Time-of-day greeting
+│   │   ├── Greeting.h/.cpp        Time-of-day greeting
+│   │   └── Transaction.h/.cpp     Transaction record, currencies, validation, dates
+│   ├── database/              All SQL lives here
+│   │   └── DatabaseManager.h/.cpp Open SQLite, create tables, save and read
 │   └── ui/                    Qt Widgets user interface
 │       ├── MainWindow.h/.cpp      Window: sidebar and page area
 │       ├── Sidebar.h/.cpp         Logo and navigation buttons
@@ -123,24 +152,23 @@ Finora/
 │   └── styles/light.qss       Colours, spacing and rounded corners
 ├── tests/
 │   ├── finora_tests.cpp       Core logic tests
-│   └── finora_ui_tests.cpp    Interface tests
+│   ├── finora_ui_tests.cpp    Interface tests
+│   └── finora_db_tests.cpp    Database tests on real SQLite files
 └── docs/                      Design, requirements and viva preparation
 ```
 
 ## Documentation
 
-- [Design: architecture, flowcharts, pseudocode, money rules](docs/DESIGN.md)
+- [Design: architecture, flowcharts, pseudocode, money rules, database](docs/DESIGN.md)
 - [Requirements checklist](docs/REQUIREMENTS_CHECKLIST.md)
 - [C++ concepts map](docs/CPP_CONCEPTS_MAP.md)
 - [Viva preparation](docs/VIVA_PREPARATION.md)
 
-## Data storage and backup
+## Known limitations at Milestone 2
 
-Planned for Milestone 2. Finora will keep all data in one SQLite database file in the user's AppData folder. A backup will be a copy of that file, made while Finora is closed. The exact location and steps will be added here when the database is built.
-
-## Known limitations at Milestone 1
-
-- No finance features yet. All seven pages are placeholders that name their milestone.
+- There is no screen for entering transactions yet. The database can save and read them, as the automated tests show, but the pages are still placeholders.
+- Budgets, savings goals and exchange rates have no tables yet. Budgets arrive in Milestone 4 as schema version 2.
 - Light theme only.
 - The build paths assume Qt is installed in `C:\Qt`.
 - The greeting is chosen when the window opens and does not change while the window stays open.
+- Nothing stops two copies of Finora from running at the same time yet. SQLite lets only one program write to the database at a time. In tests where two programs saved at the same moment, saving became very slow and some saves were rejected with a "database is locked" error. A save that cannot get the lock within about 6 seconds is rejected and not stored. Those tests found no damaged data, but they do not prove that every way of using two copies is safe, so use one Finora window at a time. Details are in [docs/DESIGN.md](docs/DESIGN.md), section 7.9.
