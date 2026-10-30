@@ -12,9 +12,12 @@
 #include <QMessageBox>
 #include <QPushButton>
 
+#include "auth/AuthService.h"
+#include "auth/PasswordHasher.h"
+#include "core/Session.h"
 #include "database/DatabaseManager.h"
 #include "database/InstanceLock.h"
-#include "ui/MainWindow.h"
+#include "ui/AppController.h"
 #include "ui/Theme.h"
 
 // Explains why Finora cannot start. Finora then closes instead of running
@@ -78,9 +81,17 @@ int main(int argc, char *argv[])
 
     // Fonts, style and colours. If the style sheet were missing, Finora
     // would still run, just with Qt's plain default look. The saved theme
-    // (light or dark) is applied by MainWindow once the database is open.
+    // (light or dark) is applied once the database is open.
     loadBundledFonts();
     applyTheme(app, THEME_LIGHT);
+
+    // libsodium protects the passwords. Without it Finora must not run.
+    if (!PasswordHasher::initializeLibrary()) {
+        QMessageBox::critical(nullptr, "Finora cannot start",
+                              "Finora could not start its security library (libsodium-26.dll), which "
+                              "protects passwords.\n\nFinora will now close.");
+        return 1;
+    }
 
     QString databasePath = DatabaseManager::defaultDatabasePath();
 
@@ -106,20 +117,34 @@ int main(int argc, char *argv[])
         }
     }
 
-    // Open the database before any page is shown. `database` is declared
-    // before `window`, so C++ destroys it after the window, and its
-    // destructor closes the connection when the program ends (RAII).
+    // Who is signed in. It is declared before `database`, so C++ destroys
+    // it after the database, which keeps a pointer to it (RAII order).
+    Session session;
+
+    // Open the database before any window is shown. Its destructor closes
+    // the connection when the program ends (RAII).
     DatabaseManager database;
     if (!database.open(databasePath)) {
         showDatabaseError(databasePath, database.lastError());
         return 1;
     }
+    // From now on every record belongs to the signed-in person, and none
+    // can be reached while nobody is signed in.
+    database.attachSession(session);
 
-    // The window gets the database so that its pages can load and save data.
-    MainWindow window(database);
-    window.show();
+    // Passwords: Argon2id MODERATE (256 MiB, 3 passes). Recovery codes:
+    // INTERACTIVE (64 MiB, 2 passes). See docs/MILESTONE4_PROGRESS.md.
+    PasswordHasher passwordHasher(HASH_MODERATE);
+    PasswordHasher recoveryCodeHasher(HASH_INTERACTIVE);
+    AuthService auth(database, session, passwordHasher, recoveryCodeHasher);
 
-    // Start the event loop: wait for user actions until the window is
-    // closed, then return the program's exit code to Windows.
-    return app.exec();
+    // The controller shows the sign-in window first, then the main window.
+    AppController controller(database, auth);
+    controller.start();
+
+    // Start the event loop: wait for user actions until the last window is
+    // closed, then end the session and return the exit code to Windows.
+    int exitCode = app.exec();
+    auth.signOut("app_closed");
+    return exitCode;
 }

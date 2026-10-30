@@ -698,3 +698,106 @@ QPlainTextEdit#licenceText {
     padding: 8px;
     font-size: 12px;
 }
+
+/* =====================================================================
+   Phase 4B: the sign-in window and the account parts
+   ===================================================================== */
+QWidget#authWindow,
+QWidget#authFormArea {
+    background-color: {{surface}};
+}
+
+/* The violet panel on the left of the sign-in window, in both themes. */
+QFrame#authBrand {
+    border: none;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #3B1A8F, stop:1 #6D4AFF);
+}
+
+QFrame#authBrand QLabel {
+    color: #FFFFFF;
+    background: transparent;
+}
+
+QLabel#authBrandTitle {
+    font-family: "Manrope";
+    font-size: 32px;
+    font-weight: 800;
+}
+
+QLabel#authBrandText {
+    font-size: 14px;
+}
+
+/* A darker box keeps the white note text above 4.5 : 1 contrast. Two
+   names make this rule stronger than "every label in the panel". */
+QFrame#authBrand QLabel#authBrandNote {
+    background-color: rgba(23, 19, 46, 90);
+    border-radius: 12px;
+    padding: 12px 14px;
+    font-size: 12px;
+}
+
+QLabel#authTitle {
+    color: {{text}};
+    font-family: "Manrope";
+    font-size: 26px;
+    font-weight: 800;
+}
+
+QLabel#authText {
+    color: {{textMuted}};
+    font-size: 13px;
+}
+
+QLabel#fieldLabel {
+    color: {{text}};
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QLabel#infoBanner {
+    background-color: {{primarySoft}};
+    color: {{primaryText}};
+    border-radius: 10px;
+    padding: 9px 12px;
+}
+
+QLabel#recoveryCode {
+    font-family: "Consolas";
+    font-size: 14px;
+    font-weight: 600;
+    color: {{text}};
+    background-color: {{surfaceMuted}};
+    border: 1px solid {{border}};
+    border-radius: 8px;
+    padding: 6px 10px;
+}
+
+/* Round letters for the signed-in person (white on violet, 5.15 : 1). */
+QLabel#avatar,
+QLabel#avatarLarge {
+    background-color: {{primary}};
+    color: #FFFFFF;
+    font-family: "Manrope";
+    font-weight: 800;
+}
+
+QLabel#avatar {
+    border-radius: 17px;
+    font-size: 13px;
+}
+
+QLabel#avatarLarge {
+    border-radius: 24px;
+    font-size: 18px;
+}
+
+QLabel#accountName {
+    color: {{text}};
+    font-weight: 600;
+}
+
+QLabel#accountEmail {
+    color: {{textMuted}};
+    font-size: 11px;
+}

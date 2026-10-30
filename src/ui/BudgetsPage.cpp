@@ -327,11 +327,8 @@ QFrame *BudgetsPage::createCurrencySummary(const std::string &currencyCode)
 
     QLabel *title = new QLabel(QString::fromStdString(currencyCode) + " budgets", card);
     title->setObjectName("cardTitle");
-    QString countText = QString::number(budgetCount) + " budget";
-    if (budgetCount != 1) {
-        countText += "s";
-    }
-    QLabel *countLabel = new QLabel(countText + " · " + monthTitle(switcher->month()), card);
+    QLabel *countLabel = new QLabel(countText(budgetCount, "budget", "budgets") + " · "
+                                        + monthTitle(switcher->month()), card);
     countLabel->setObjectName("cardSubtitle");
 
     QLabel *amounts = new QLabel(card);

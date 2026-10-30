@@ -10,9 +10,12 @@
 #include <string>
 #include <vector>
 
+#include "core/AccountRules.h"
 #include "core/Budget.h"
 #include "core/Greeting.h"
 #include "core/Money.h"
+#include "core/PasswordPolicy.h"
+#include "core/Session.h"
 #include "core/Totals.h"
 #include "core/Transaction.h"
 #include "core/TransactionFilter.h"
@@ -616,6 +619,88 @@ void testBudgetRules(TestCounter &counter)
               all.size() == 2 && all[0].spentMinor == 150050 && all[1].spentMinor == 5000, true);
 }
 
+// =====================================================================
+//  Milestone 4, Phase 4B: password policy and account rules
+// =====================================================================
+
+void testPasswordPolicy(TestCounter &counter)
+{
+    checkInt(counter, "characterCount counts an Urdu letter as one character", characterCount("پ"), 1);
+    checkInt(counter, "characterCount of a mixed password",
+             characterCount("Passپاس 2026"), 12);
+
+    checkBool(counter, "Password123 is a common password (case ignored)", isCommonPassword("Password123"), true);
+    checkBool(counter, "Correct Horse 9! is not on the common list", isCommonPassword("Correct Horse 9!"), false);
+
+    checkText(counter, "9 characters is very weak", passwordStrengthName(passwordStrength("abcdefg12")), "Very weak");
+    checkText(counter, "a common password is very weak", passwordStrengthName(passwordStrength("qwertyuiop")),
+              "Very weak");
+    checkText(counter, "one character repeated is very weak", passwordStrengthName(passwordStrength("aaaaaaaaaaaa")),
+              "Very weak");
+    checkText(counter, "12 small letters only is weak", passwordStrengthName(passwordStrength("correcthorse")), "Weak");
+    checkText(counter, "letters and a digit, 13 characters, is fair",
+              passwordStrengthName(passwordStrength("correcthorse7")), "Fair");
+    checkText(counter, "3 kinds of characters, 11 long, is strong",
+              passwordStrengthName(passwordStrength("Sunflower22")), "Strong");
+    checkText(counter, "4 kinds and 16 characters is very strong",
+              passwordStrengthName(passwordStrength("Correct Horse 9!")), "Very strong");
+
+    checkText(counter, "the tip for a short password", passwordTip("short1"), "Use at least 10 characters.");
+    checkText(counter, "the tip for letters only", passwordTip("correcthorse"), "Mix letters with numbers or symbols.");
+    checkText(counter, "a very strong password needs no tip", passwordTip("Correct Horse 9!"), "");
+
+    checkText(counter, "a new password needs 10 characters",
+              validateNewPassword("Abc12345!", "ali@example.com", "Ali Khan"), "Use at least 10 characters.");
+    checkText(counter, "a common password is refused",
+              validateNewPassword("Password123", "ali@example.com", "Ali Khan"),
+              "This password is too common. Please choose another one.");
+    checkText(counter, "a password containing the email name is refused",
+              validateNewPassword("saeedkhan2026!", "saeedkhan@example.com", "Ali"),
+              "Do not use your name or email address in the password.");
+    checkText(counter, "a password containing a word of the name is refused",
+              validateNewPassword("Muhammad#2026x", "ali@example.com", "Muhammad Saeed"),
+              "Do not use your name or email address in the password.");
+    checkText(counter, "a weak password is refused",
+              validateNewPassword("correcthorse", "ali@example.com", "Ali Khan"),
+              "This password is too easy to guess. Make it longer, or mix letters, numbers and symbols.");
+    checkText(counter, "a fair password is accepted",
+              validateNewPassword("correcthorse7", "ali@example.com", "Ali Khan"), "");
+    checkText(counter, "10 spaces are refused",
+              validateNewPassword("          ", "ali@example.com", "Ali Khan"), "A password cannot be only spaces.");
+}
+
+void testAccountRules(TestCounter &counter)
+{
+    checkText(counter, "an email is stored trimmed and in small letters", normalizeEmail("  Ali@Mail.PK "), "ali@mail.pk");
+    checkText(counter, "a normal email is valid", validateEmail("muhammad.saeed+finora@student.muet.edu.pk"), "");
+    const std::string invalid = "Please enter a valid email address, for example name@example.com.";
+    checkText(counter, "an email without @ is refused", validateEmail("ali.example.com"), invalid);
+    checkText(counter, "an email with two @ is refused", validateEmail("ali@@example.com"), invalid);
+    checkText(counter, "an email without a dot in the domain is refused", validateEmail("ali@localhost"), invalid);
+    checkText(counter, "an email with a space is refused", validateEmail("ali khan@example.com"), invalid);
+    checkText(counter, "an empty email asks for one", validateEmail("   "), "Please enter your email address.");
+
+    checkText(counter, "an empty name is refused", validateDisplayName("  "), "Please enter your name.");
+    checkText(counter, "an Urdu name is accepted", validateDisplayName("محمد"), "");
+    checkText(counter, "the first name of a full name", firstNameOf("Muhammad Saeed"), "Muhammad");
+
+    checkText(counter, "a recovery code is shown in three groups", formatRecoveryCode("7KQ4M2TX9RHC"), "7KQ4-M2TX-9RHC");
+    checkText(counter, "a typed code ignores spaces, dashes and small letters",
+              normalizeRecoveryCode(" 7kq4 m2tx-9rhc "), "7KQ4M2TX9RHC");
+    checkText(counter, "a code with the letter O is not a recovery code", normalizeRecoveryCode("7KQ4-M2TX-9RHO"), "");
+    checkText(counter, "a code that is too short is refused", normalizeRecoveryCode("7KQ4-M2TX"), "");
+    checkInt(counter, "the recovery alphabet has 32 characters", static_cast<int>(RECOVERY_CODE_ALPHABET.length()), 32);
+
+    checkInt(counter, "no wait after 2 wrong passwords", signInDelaySeconds(2), 0);
+    checkInt(counter, "30 seconds after 3", signInDelaySeconds(3), 30);
+    checkInt(counter, "60 seconds after 4", signInDelaySeconds(4), 60);
+    checkInt(counter, "480 seconds after 7", signInDelaySeconds(7), 480);
+    checkInt(counter, "never more than 15 minutes", signInDelaySeconds(50), 900);
+
+    Session nobody;
+    checkBool(counter, "a new Session is signed out, with user id 0", !nobody.isSignedIn() && nobody.userId() == 0, true);
+}
+
 int main()
 {
     TestCounter counter;
@@ -640,6 +725,10 @@ int main()
     testSpendingByCategory(counter);
     testChartHelpers(counter);
     testBudgetRules(counter);
+
+    std::cout << "---- Milestone 4, Phase 4B: passwords and accounts ----\n";
+    testPasswordPolicy(counter);
+    testAccountRules(counter);
 
     std::cout << "-----------------\n";
     std::cout << counter.checksRun << " checks, " << counter.checksFailed << " failed\n";

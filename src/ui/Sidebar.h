@@ -41,12 +41,18 @@ public:
     // example after switching to the dark theme.
     void refreshTheme();
 
+    // Shows who is signed in, with a Sign out button, at the bottom.
+    void showAccount(const QString &displayName, const QString &email);
+
 signals:
     // Sent when the user clicks one of the navigation buttons.
     void pageSelected(int pageNumber);
 
     // Sent when the user clicks "Dark mode" / "Light mode".
     void themeToggleClicked();
+
+    // Sent when the user clicks "Sign out".
+    void signOutClicked();
 
 private slots:
     // Runs when a navigation button is clicked.
@@ -60,6 +66,11 @@ private:
     QButtonGroup *navButtonGroup = nullptr;   // keeps exactly one button selected
     QLabel *logoLabel = nullptr;
     QPushButton *themeButton = nullptr;
+    QFrame *accountArea = nullptr;        // hidden until showAccount()
+    QLabel *avatarLabel = nullptr;
+    QLabel *accountNameLabel = nullptr;
+    QLabel *accountEmailLabel = nullptr;
+    QPushButton *signOutButton = nullptr;
 };
 
 #endif // FINORA_SIDEBAR_H

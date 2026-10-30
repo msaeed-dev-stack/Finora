@@ -311,8 +311,12 @@ void DashboardPage::refresh()
         QMessageBox::warning(this, "Finora", "Could not load the budgets.\n\nReason: " + budgetStore.lastError());
     }
 
-    // The greeting follows the time of day. Phase 4B adds the user's name.
-    greetingLabel->setText(QString::fromStdString(greetingForHour(QTime::currentTime().hour())));
+    // The greeting follows the time of day, with the signed-in person's name.
+    QString greeting = QString::fromStdString(greetingForHour(QTime::currentTime().hour()));
+    if (!userFirstName.isEmpty()) {
+        greeting += ", " + userFirstName;
+    }
+    greetingLabel->setText(greeting);
 
     switcher->refreshIcons();
     updateLegend();
@@ -397,11 +401,11 @@ void DashboardPage::showBudgetAlerts()
     if (alerts.empty()) {
         QLabel *icon = new QLabel(card);
         icon->setPixmap(tintedIcon("check_circle", themeColors().income, 22));
-        QString countText = "Your budget is on track";
+        QString message = "Your budget is on track";
         if (budgets.size() > 1) {
-            countText = "All " + QString::number(budgets.size()) + " budgets are on track";
+            message = "All " + QString::number(budgets.size()) + " budgets are on track";
         }
-        QLabel *text = new QLabel(countText + " this month.", card);
+        QLabel *text = new QLabel(message + " this month.", card);
         text->setObjectName("bodyText");
         text->setWordWrap(true);
         QHBoxLayout *row = new QHBoxLayout();
@@ -618,6 +622,12 @@ void DashboardPage::onMonthChanged()
     showChart();
     showBudgetAlerts();
     showSpending();
+}
+
+void DashboardPage::setUserName(const QString &firstName)
+{
+    userFirstName = firstName;
+    refresh();
 }
 
 // ---- For the tests -------------------------------------------------------

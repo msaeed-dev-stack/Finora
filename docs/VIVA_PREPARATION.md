@@ -4,7 +4,7 @@ Questions your Programming Fundamentals instructor may ask about Finora, with an
 
 Features that are not built yet are marked **Planned — Not Yet Implemented**. Never present them as finished.
 
-Last updated: Milestone 4, Phase 4A, 30 October 2026.
+Last updated: Milestone 4, Phase 4B, 30 October 2026.
 
 **How to use this file.** Read the short answer first. Then open the file named under "Where in the code" and find the lines yourself. If you cannot explain a line, study it before the viva.
 
@@ -26,7 +26,7 @@ Last updated: Milestone 4, Phase 4A, 30 October 2026.
 - **Detailed explanation:** Freelancers often earn in USD or EUR and spend in PKR, which is why the database already stores a currency with every transaction.
 
 ### A4. What are the main features?
-- **Short answer:** Done: navigation, the Transactions page with add, edit, delete, search and filters, the dashboard, monthly budgets, a light and a dark theme, settings, and a safe database upgrade. Planned: accounts and sign-in (Phase 4B), subscription plans (Phase 4C), goals, exchange rates and reports.
+- **Short answer:** Done: navigation, the Transactions page with add, edit, delete, search and filters, the dashboard, monthly budgets, a light and a dark theme, settings, a safe database upgrade, and local accounts with Argon2id passwords and one person's data per account. Planned: subscription plans (Phase 4C), goals, exchange rates and reports.
 - **Detailed explanation:** See the feature table in `README.md` and sections K and L of this guide.
 
 ### A5. What are the scope and limitations?
@@ -729,6 +729,105 @@ The full step-by-step script is in `docs/DEMO_MILESTONE3.md`. In short:
 
 ---
 
+## M. Milestone 4, Phase 4B: Accounts and Security
+
+### M1. What did Phase 4B add?
+- **Short answer:** Local accounts.
+  - Sign-up, sign-in and sign-out, a profile, and a password change.
+  - Recovery codes for a forgotten password.
+  - Sessions that end by themselves.
+  - Most important: every transaction, budget and setting belongs to one account, and nobody sees another person's records.
+- **Where in the code:** `src/auth/`, `src/database/UserStore.cpp`, `src/ui/AuthWindow.cpp`, `src/ui/AppController.cpp`.
+
+### M2. How is a password stored? Why not encrypt it?
+- **Short answer:** Finora stores a one-way **hash**, made with **Argon2id** by libsodium, never the password. Encryption can be reversed with a key; a hash cannot be turned back into the password.
+- **Detailed explanation:** To sign in, Finora hashes the typed password again with the salt and settings saved in the stored string, and compares the result. If the database file were stolen, the attacker would still have to guess passwords one by one. Each guess costs 256 MiB of memory and three passes over it.
+- **Example:** `$argon2id$v=19$m=262144,t=3,p=1$<salt>$<hash>` means Argon2id version 19, 262,144 KiB (256 MiB), 3 passes, 1 lane.
+
+### M3. What is a salt, and why must each one be different?
+- **Short answer:** A random value mixed into the hash. With a different salt for every hash, two people with the same password get different hashes, and an attacker cannot use one precomputed table for everybody.
+- **Where in the code:** `crypto_pwhash_str` in `PasswordHasher::hash` makes a new 16-byte salt each time. A test checks that two accounts with the same password have different hashes.
+
+### M4. Why the MODERATE setting? How do you know it really uses 256 MiB?
+- **Short answer:** MODERATE makes each guess expensive, about 0.65 s and 256 MiB, but is still quick enough to sign in.
+- **Detailed explanation:** The test `finora_auth_tests` reads Windows' memory counters for its own process. Peak memory went from about 9 MiB to about 265 MiB during one hash and fell back afterwards.
+  - If a computer cannot provide the memory, `hash()` returns `false`. Finora then shows a clear message and creates no account.
+  - The test forces this with a 512 GiB setting.
+  - Recovery codes use the lighter INTERACTIVE setting (64 MiB), because they are already random.
+
+### M5. How does sign-in avoid telling an attacker which emails have accounts?
+- **Short answer:** A wrong password and an unknown email give exactly the same message ("The email or password is not correct."). Both have the same waiting times after 3 failures. For an unknown email, Finora still checks the password against a dummy hash, so the answer takes about as long.
+- **Where in the code:** `AuthService::signIn`, `failForUnknownEmail`, `dummyPasswordHash`.
+
+### M6. How do the waiting times after wrong passwords work?
+- **Short answer:** `signInDelaySeconds(failures)` is 0 for the first two failures, 30 seconds after the third, then doubles each time up to 15 minutes.
+- **Detailed explanation:** `users.locked_until` stores the end of the waiting time. While it lasts, not even the right password is checked. A successful sign-in sets the counter back to 0.
+
+### M7. How do you make sure that a person sees only their own records?
+- **Short answer:** Every transaction and budget row has an owner, `user_id`. Every SQL statement says `WHERE ... AND user_id IS :owner`. The owner always comes from the `Session`, never from the screen.
+- **Detailed explanation:** `DatabaseManager::attachSession` connects the database to the program's one `Session`.
+  - Signed in: the owner is the person's id.
+  - Signed out: every data function refuses with "Please sign in first."
+- **Example:** Bilal asks for Amna's transaction by its id. He gets "No transaction with id 5 was found.", exactly as for an id that does not exist.
+
+### M8. What is a friend class, and why did you use one?
+- **Short answer:** A friend class may use another class's private members. `Session` declares `friend class AuthService;`, so only `AuthService` can call `start()` and `end()`.
+- **Detailed explanation:** Every page can read who is signed in, but no page can make itself someone else. This is encapsulation with one controlled exception.
+
+### M9. What are recovery codes, and why are they single-use and hashed?
+- **Short answer:** Ten random codes such as `7KQ4-M2TX-9RHC`, shown once at sign-up. Each code resets a forgotten password once.
+- **Detailed explanation:**
+  - They are hashed like passwords, so a stolen database does not reveal them.
+  - When a code is used, `used_at` is set in the same transaction that stores the new password, so the code can never work again.
+  - The alphabet has no 0, 1, I or O. That gives 32 characters, and 32^12 = 2^60 possible codes.
+
+### M10. How do sessions end?
+- **Short answer:** Six ways:
+  - "Sign out";
+  - 15 minutes without a key press or mouse action;
+  - 12 hours after signing in;
+  - closing Finora;
+  - resetting the password;
+  - a crash (closed at the next start).
+- **Detailed explanation:** Each one writes its own reason into `login_sessions`. For the idle time, `AppController` uses an **event filter**: it overrides the virtual function `eventFilter`, which Qt calls for every event of the program.
+
+### M11. What happened to the records made before accounts existed?
+- **Short answer:** Nothing, until a person agrees. They keep `user_id = NULL`, so nobody sees them.
+- **Detailed explanation:**
+  - After sign-up, Finora asks once whether to move them. The default button is "Not now". Settings offers the same move later.
+  - The move runs in one transaction: it checks that every transaction moved, and keeps out budgets that would duplicate the person's own.
+
+### M12. Why did you add an outside library, and how did you check it?
+- **Short answer:** Secure password hashing should never be written yourself, so I used libsodium, a widely used cryptography library.
+- **Detailed explanation:**
+  1. I downloaded the official MinGW package from two official sources and they matched.
+  2. I verified its minisign signature with the official key from libsodium's documentation, and a copy with one changed byte was correctly rejected.
+  3. I tested it with this exact compiler and Qt version, and an independent Argon2id implementation (OpenSSL) produced the same results.
+  4. Everything is recorded in `third_party/libsodium-1.0.22/VERIFICATION.md`.
+- **Licence:** libsodium uses the ISC licence, which allows this use when the notice is kept; the notice is in `THIRD_PARTY_NOTICES.md` and in Settings.
+
+### M13. Why recovery codes instead of a "reset password" email?
+- **Short answer:** Finora is offline and has no server. Sending email would need an email service and its secret passwords, and secrets must never be put inside a desktop program.
+- **Detailed explanation:** A production online version would email a time-limited reset link to a verified address, and keep recovery codes as a backup. The README has a table comparing the two.
+
+### M14. How was Phase 4B tested?
+- **Short answer:** `finora_auth_tests` has 106 checks on real SQLite files, the interface tests have 33 new checks through the real windows, and the core tests have 42 new checks for the rules.
+- **Detailed explanation:** Among other things, the tests prove that:
+  - the password appears nowhere in the database file;
+  - the general messages are identical;
+  - two accounts cannot touch each other's records;
+  - a recovery code works once;
+  - signing out blocks all data access.
+
+### M15. Trace a sign-in from the button to the dashboard.
+1. **The window.** `AuthWindow::onSignInClicked` reads the password with `takePassword()`, which empties the box. It shows "Signing in..." and a busy pointer.
+2. **The check.** `AuthService::signIn` finds the account and checks the waiting time. It verifies the password with Argon2id, then wipes the password.
+3. **The session.** It starts a session row, and `Session::start` stores the user id; only `AuthService`, as a friend, can do this.
+4. **The main window.** `AuthWindow` emits `signedIn`. `AppController` creates `MainWindow(database, &auth)`, which shows the name and greets the person.
+5. **The data.** `DashboardPage::refresh` loads transactions. `DatabaseManager` adds `user_id IS :owner` with the id from the `Session`, so only this person's records appear.
+
+---
+
 ## Quick Revision
 
 - **Finora:** offline Windows finance app in C++17, Qt 6 Widgets and SQLite; Milestones 1 to 3 and Phase 4A of Milestone 4 are done.
@@ -749,5 +848,7 @@ The full step-by-step script is in `docs/DEMO_MILESTONE3.md`. In short:
 - **Prepared statements:** placeholders plus `bindValue`, so there is no SQL injection.
 - **RAII:** the destructor closes the database; braces end handle lifetimes before `removeDatabase`; copying is disabled.
 - **Loops:** `for` for fixed counts, `while (query.next())` for database rows.
-- **Tests:** 199 core, 131 interface and 157 database checks (487 in total), all passing on Windows on 30 October 2026.
-- **Not built yet:** sign-in and accounts (Phase 4B), subscription plans (Phase 4C), goals, exchange rates and reports. Say "planned for Phase 4B", "4C" or "Milestone N".
+- **Accounts:** passwords stored only as Argon2id hashes (libsodium, MODERATE: 256 MiB, 3 passes) with unique salts; identical messages for a wrong password and an unknown email; waiting times after 3 failures; 10 hashed, single-use recovery codes; sessions end after sign-out, 15 idle minutes or 12 hours.
+- **Isolation:** `user_id IS :owner` in every query; the owner comes only from the `Session`, which only `AuthService` (a friend class) can change.
+- **Tests:** 241 core, 164 interface, 157 database and 106 account checks (668 in total), all passing on Windows on 30 October 2026.
+- **Not built yet:** subscription plans (Phase 4C), goals, exchange rates and reports. Say "planned for Phase 4C" or "Milestone N".

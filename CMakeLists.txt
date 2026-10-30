@@ -47,6 +47,9 @@ add_library(finora_core STATIC
     src/core/TransactionFilter.h  src/core/TransactionFilter.cpp
     src/core/Totals.h         src/core/Totals.cpp
     src/core/Budget.h         src/core/Budget.cpp
+    src/core/PasswordPolicy.h src/core/PasswordPolicy.cpp
+    src/core/AccountRules.h   src/core/AccountRules.cpp
+    src/core/Session.h        src/core/Session.cpp
 )
 target_include_directories(finora_core PUBLIC src)
 target_compile_options(finora_core PRIVATE ${FINORA_WARNINGS})
@@ -56,7 +59,7 @@ target_compile_options(finora_core PRIVATE ${FINORA_WARNINGS})
 #     together with the lock that lets only one copy of Finora use
 #     the database at a time.
 #     Qt SQL is linked PRIVATE: code that uses this library does not
-#     see any SQL classes, only DatabaseManager, BudgetStore and InstanceLock.
+#     see any SQL classes, only DatabaseManager, BudgetStore, UserStore and InstanceLock.
 # =====================================================================
 add_library(finora_database STATIC
     src/database/DatabaseManager.h
@@ -65,12 +68,50 @@ add_library(finora_database STATIC
     src/database/InstanceLock.cpp
     src/database/BudgetStore.h
     src/database/BudgetStore.cpp
+    src/database/UserStore.h
+    src/database/UserStore.cpp
 )
 target_include_directories(finora_database PUBLIC src)
 target_link_libraries(finora_database
     PUBLIC  finora_core Qt6::Core
     PRIVATE Qt6::Sql)
 target_compile_options(finora_database PRIVATE ${FINORA_WARNINGS})
+
+# =====================================================================
+#  libsodium 1.0.22 - Argon2id password hashing and secure random numbers.
+#  The official, signature-verified MinGW build is kept UNCHANGED in
+#  third_party/libsodium-1.0.22 (see VERIFICATION.md there). Finora links
+#  the DLL through its import library. Do not replace it without approval.
+# =====================================================================
+set(FINORA_SODIUM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/libsodium-1.0.22")
+add_library(finora_sodium SHARED IMPORTED)
+set_target_properties(finora_sodium PROPERTIES
+    IMPORTED_LOCATION "${FINORA_SODIUM_DIR}/bin/libsodium-26.dll"
+    IMPORTED_IMPLIB "${FINORA_SODIUM_DIR}/lib/libsodium.dll.a"
+    INTERFACE_INCLUDE_DIRECTORIES "${FINORA_SODIUM_DIR}/include")
+
+# windeployqt copies only Qt's own files, so every program that uses
+# libsodium gets libsodium-26.dll copied next to it after each build.
+function(finora_copy_sodium_dll target)
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${FINORA_SODIUM_DIR}/bin/libsodium-26.dll" "$<TARGET_FILE_DIR:${target}>"
+        COMMENT "Copying libsodium-26.dll next to ${target}")
+endfunction()
+
+# =====================================================================
+#  2b. finora_auth - accounts: password hashing, sign-up, sign-in,
+#      sessions and recovery codes. Only this library sees libsodium.
+# =====================================================================
+add_library(finora_auth STATIC
+    src/auth/PasswordHasher.h   src/auth/PasswordHasher.cpp
+    src/auth/AuthService.h      src/auth/AuthService.cpp
+)
+target_include_directories(finora_auth PUBLIC src)
+target_link_libraries(finora_auth
+    PUBLIC  finora_database finora_core
+    PRIVATE finora_sodium)
+target_compile_options(finora_auth PRIVATE ${FINORA_WARNINGS})
 
 # =====================================================================
 #  3. Finora - the desktop application
@@ -96,6 +137,11 @@ set(FINORA_UI_SOURCES
     src/ui/components/ProgressRing.h    src/ui/components/ProgressRing.cpp
     src/ui/components/WalletCard.h      src/ui/components/WalletCard.cpp
     src/ui/components/MoneyFlowChart.h  src/ui/components/MoneyFlowChart.cpp
+    src/ui/components/PasswordField.h   src/ui/components/PasswordField.cpp
+    src/ui/components/RecoveryCodesPanel.h  src/ui/components/RecoveryCodesPanel.cpp
+    src/ui/AuthWindow.h       src/ui/AuthWindow.cpp
+    src/ui/AccountDialogs.h   src/ui/AccountDialogs.cpp
+    src/ui/AppController.h    src/ui/AppController.cpp
 )
 
 # Icons, fonts (with their licences) and the style sheet. They are built
@@ -111,6 +157,8 @@ set(FINORA_RESOURCE_FILES
     resources/icons/chevron_down_light.svg  resources/icons/chevron_down_dark.svg
     resources/icons/check_circle.svg   resources/icons/check_white.svg
     resources/icons/moon.svg           resources/icons/sun.svg
+    resources/icons/eye.svg            resources/icons/eye_off.svg
+    resources/icons/log_out.svg
     resources/fonts/Inter-Regular.ttf  resources/fonts/Inter-Medium.ttf
     resources/fonts/Inter-SemiBold.ttf resources/fonts/Inter-Bold.ttf
     resources/fonts/Inter-OFL.txt
@@ -128,11 +176,18 @@ qt_add_resources(Finora "finora_resources"
     BASE resources
     FILES ${FINORA_RESOURCE_FILES}
 )
+# libsodium's licence text, shown under Settings > View licences.
+qt_add_resources(Finora "finora_licences"
+    PREFIX "/licences/libsodium"
+    BASE third_party/libsodium-1.0.22
+    FILES third_party/libsodium-1.0.22/LICENSE
+)
 target_include_directories(Finora PRIVATE src)
-target_link_libraries(Finora PRIVATE finora_core finora_database Qt6::Widgets Qt6::Svg)
+target_link_libraries(Finora PRIVATE finora_core finora_database finora_auth Qt6::Widgets Qt6::Svg)
 target_compile_options(Finora PRIVATE ${FINORA_WARNINGS})
 # The version number above is passed to the C++ code as FINORA_VERSION.
 target_compile_definitions(Finora PRIVATE FINORA_VERSION="${PROJECT_VERSION}")
+finora_copy_sodium_dll(Finora)
 
 # After every build, windeployqt copies the Qt DLLs, Qt plugins and the
 # MinGW runtime next to Finora.exe, so it also runs by double-clicking it.
@@ -184,10 +239,16 @@ qt_add_resources(finora_ui_tests "finora_ui_test_resources"
     BASE resources
     FILES ${FINORA_RESOURCE_FILES}
 )
+qt_add_resources(finora_ui_tests "finora_ui_test_licences"
+    PREFIX "/licences/libsodium"
+    BASE third_party/libsodium-1.0.22
+    FILES third_party/libsodium-1.0.22/LICENSE
+)
 target_include_directories(finora_ui_tests PRIVATE src)
-target_link_libraries(finora_ui_tests PRIVATE finora_core finora_database Qt6::Widgets Qt6::Svg)
+target_link_libraries(finora_ui_tests PRIVATE finora_core finora_database finora_auth Qt6::Widgets Qt6::Svg)
 target_compile_options(finora_ui_tests PRIVATE ${FINORA_WARNINGS})
 target_compile_definitions(finora_ui_tests PRIVATE FINORA_VERSION="${PROJECT_VERSION}")
+finora_copy_sodium_dll(finora_ui_tests)
 add_test(NAME ui_tests COMMAND finora_ui_tests)
 # "offscreen" draws windows in memory, so nothing pops up during tests.
 # TIMEOUT stops the test after 120 s if a pop-up window ever waits forever.
@@ -201,4 +262,17 @@ target_link_libraries(finora_db_tests PRIVATE finora_database finora_core Qt6::C
 target_compile_options(finora_db_tests PRIVATE ${FINORA_WARNINGS})
 add_test(NAME database_tests COMMAND finora_db_tests)
 set_tests_properties(database_tests PROPERTIES
+    ENVIRONMENT "QT_PLUGIN_PATH=${FINORA_QT_PLUGINS_DIR}")
+
+# 4d. Account and security tests: Argon2id, sign-up, sign-in, sessions,
+#     recovery codes and one person's data per account. psapi reads the
+#     process's memory use, to prove the 256 MiB Argon2id setting.
+add_executable(finora_auth_tests tests/finora_auth_tests.cpp)
+target_link_libraries(finora_auth_tests PRIVATE finora_auth finora_database finora_core
+                                                Qt6::Core Qt6::Sql psapi)
+target_compile_options(finora_auth_tests PRIVATE ${FINORA_WARNINGS})
+finora_copy_sodium_dll(finora_auth_tests)
+add_test(NAME auth_tests COMMAND finora_auth_tests)
+set_tests_properties(auth_tests PROPERTIES
+    TIMEOUT 300
     ENVIRONMENT "QT_PLUGIN_PATH=${FINORA_QT_PLUGINS_DIR}")

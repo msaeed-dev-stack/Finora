@@ -189,6 +189,38 @@ QString DatabaseManager::sqlConnectionName() const
     return connectionName;
 }
 
+void DatabaseManager::attachSession(const Session &session)
+{
+    attachedSession = &session;
+}
+
+bool DatabaseManager::currentOwner(QVariant &ownerId)
+{
+    // No Session attached (the database tests of Milestones 2 to 4A):
+    // the records that belong to no account. A null QVariant becomes SQL
+    // NULL, and "user_id IS NULL" finds them.
+    if (attachedSession == nullptr) {
+        ownerId = QVariant();
+        return true;
+    }
+    // A Session is attached but nobody is signed in: no records at all.
+    if (!attachedSession->isSignedIn()) {
+        return fail("Please sign in first.");
+    }
+    ownerId = attachedSession->userId();
+    return true;
+}
+
+bool DatabaseManager::signedInUserId(int &userId) const
+{
+    userId = 0;
+    if (attachedSession == nullptr || !attachedSession->isSignedIn()) {
+        return false;
+    }
+    userId = attachedSession->userId();
+    return true;
+}
+
 int DatabaseManager::schemaVersion()
 {
     if (!opened) {
@@ -243,19 +275,26 @@ bool DatabaseManager::addTransaction(Transaction &transaction)
         return fail(QString::fromStdString(problem));
     }
 
+    // The new row belongs to the signed-in person (see currentOwner).
+    QVariant owner;
+    if (!currentOwner(owner)) {
+        return false;
+    }
+
     // A prepared statement: the SQL text contains only placeholders such
     // as :description, and the values are sent separately. A description
     // like  Ali's shop  therefore can never change the SQL command.
     QSqlQuery query(QSqlDatabase::database(connectionName, false));
     bool prepared = query.prepare(
         "INSERT INTO transactions "
-        "(type, amount_minor, currency_code, category, description, transaction_date) "
-        "VALUES (:type, :amount, :currency, :category, :description, :date)");
+        "(user_id, type, amount_minor, currency_code, category, description, transaction_date) "
+        "VALUES (:owner, :type, :amount, :currency, :category, :description, :date)");
     if (!prepared) {
         return fail("Could not prepare to save the transaction: " + query.lastError().text());
     }
 
     bindTransactionValues(query, transaction);
+    query.bindValue(":owner", owner);
 
     if (!query.exec()) {
         return fail("Could not save the transaction: " + query.lastError().text());
@@ -275,14 +314,22 @@ bool DatabaseManager::findTransactionById(int id, Transaction &result)
         return fail("A transaction id must be a number above 0.");
     }
 
+    QVariant owner;
+    if (!currentOwner(owner)) {
+        return false;
+    }
+
+    // "user_id IS :owner" finds only the owner's rows: another person's
+    // id gives "not found", exactly like an id that does not exist.
     QSqlQuery query(QSqlDatabase::database(connectionName, false));
     bool prepared = query.prepare(
         "SELECT id, type, amount_minor, currency_code, category, description, transaction_date "
-        "FROM transactions WHERE id = :id");
+        "FROM transactions WHERE id = :id AND user_id IS :owner");
     if (!prepared) {
         return fail("Could not prepare to read the transaction: " + query.lastError().text());
     }
     query.bindValue(":id", id);
+    query.bindValue(":owner", owner);
 
     if (!query.exec()) {
         return fail("Could not read the transaction: " + query.lastError().text());
@@ -303,10 +350,16 @@ bool DatabaseManager::loadTransactions(std::vector<Transaction> &results)
         return fail("The database is not open.");
     }
 
-    // No values come from the user here, so a plain query is enough.
+    QVariant owner;
+    if (!currentOwner(owner)) {
+        return false;
+    }
+
     QSqlQuery query(QSqlDatabase::database(connectionName, false));
-    if (!query.exec("SELECT id, type, amount_minor, currency_code, category, description, transaction_date "
-                    "FROM transactions ORDER BY transaction_date DESC, id DESC")) {
+    query.prepare("SELECT id, type, amount_minor, currency_code, category, description, transaction_date "
+                  "FROM transactions WHERE user_id IS :owner ORDER BY transaction_date DESC, id DESC");
+    query.bindValue(":owner", owner);
+    if (!query.exec()) {
         return fail("Could not load the transactions: " + query.lastError().text());
     }
 
@@ -332,17 +385,23 @@ bool DatabaseManager::updateTransaction(const Transaction &transaction)
         return fail(QString::fromStdString(problem));
     }
 
+    QVariant owner;
+    if (!currentOwner(owner)) {
+        return false;
+    }
+
     QSqlQuery query(QSqlDatabase::database(connectionName, false));
     bool prepared = query.prepare(
         "UPDATE transactions SET type = :type, amount_minor = :amount, currency_code = :currency, "
         "category = :category, description = :description, transaction_date = :date, "
         "updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') "
-        "WHERE id = :id");
+        "WHERE id = :id AND user_id IS :owner");
     if (!prepared) {
         return fail("Could not prepare to update the transaction: " + query.lastError().text());
     }
     bindTransactionValues(query, transaction);
     query.bindValue(":id", transaction.id);
+    query.bindValue(":owner", owner);
 
     if (!query.exec()) {
         return fail("Could not update the transaction: " + query.lastError().text());
@@ -364,12 +423,18 @@ bool DatabaseManager::deleteTransaction(int id)
         return fail("A transaction id must be a number above 0.");
     }
 
+    QVariant owner;
+    if (!currentOwner(owner)) {
+        return false;
+    }
+
     QSqlQuery query(QSqlDatabase::database(connectionName, false));
-    bool prepared = query.prepare("DELETE FROM transactions WHERE id = :id");
+    bool prepared = query.prepare("DELETE FROM transactions WHERE id = :id AND user_id IS :owner");
     if (!prepared) {
         return fail("Could not prepare to delete the transaction: " + query.lastError().text());
     }
     query.bindValue(":id", id);
+    query.bindValue(":owner", owner);
 
     if (!query.exec()) {
         return fail("Could not delete the transaction: " + query.lastError().text());
@@ -822,12 +887,23 @@ QString DatabaseManager::setting(const QString &key, const QString &defaultValue
         return defaultValue;
     }
 
+    // Signed in: the person's own settings. Otherwise: the settings of
+    // this Finora installation (used by the sign-in window).
+    int userId = 0;
+    bool personal = signedInUserId(userId);
     QSqlQuery query(QSqlDatabase::database(connectionName, false));
-    if (!query.prepare("SELECT value FROM app_settings WHERE key = :key")) {
+    QString sql = "SELECT value FROM app_settings WHERE key = :key";
+    if (personal) {
+        sql = "SELECT value FROM user_settings WHERE user_id = :user AND key = :key";
+    }
+    if (!query.prepare(sql)) {
         fail("Could not prepare to read a setting: " + query.lastError().text());
         return defaultValue;
     }
     query.bindValue(":key", key);
+    if (personal) {
+        query.bindValue(":user", userId);
+    }
     if (!query.exec()) {
         fail("Could not read a setting: " + query.lastError().text());
         return defaultValue;
@@ -845,13 +921,23 @@ bool DatabaseManager::saveSetting(const QString &key, const QString &value)
         return fail("The database is not open.");
     }
 
-    // INSERT OR REPLACE adds the row, or replaces the row that already has this key.
+    // INSERT OR REPLACE adds the row, or replaces the row that already has
+    // this key. Signed in, the setting is the person's own.
+    int userId = 0;
+    bool personal = signedInUserId(userId);
+    QString sql = "INSERT OR REPLACE INTO app_settings (key, value) VALUES (:key, :value)";
+    if (personal) {
+        sql = "INSERT OR REPLACE INTO user_settings (user_id, key, value) VALUES (:user, :key, :value)";
+    }
     QSqlQuery query(QSqlDatabase::database(connectionName, false));
-    if (!query.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES (:key, :value)")) {
+    if (!query.prepare(sql)) {
         return fail("Could not prepare to save a setting: " + query.lastError().text());
     }
     query.bindValue(":key", key);
     query.bindValue(":value", value);
+    if (personal) {
+        query.bindValue(":user", userId);
+    }
     if (!query.exec()) {
         return fail("Could not save a setting: " + query.lastError().text());
     }
@@ -865,8 +951,14 @@ bool DatabaseManager::recordAuditEvent(const QString &eventType, const QString &
     }
 
     QSqlQuery query(QSqlDatabase::database(connectionName, false));
-    if (!query.prepare("INSERT INTO audit_events (event_type, details) VALUES (:type, :details)")) {
+    if (!query.prepare("INSERT INTO audit_events (user_id, event_type, details) VALUES (:user, :type, :details)")) {
         return fail("Could not prepare to record an event: " + query.lastError().text());
+    }
+    int userId = 0;
+    if (signedInUserId(userId)) {
+        query.bindValue(":user", userId);
+    } else {
+        query.bindValue(":user", QVariant());   // NULL: no account
     }
     query.bindValue(":type", eventType);
     query.bindValue(":details", details);

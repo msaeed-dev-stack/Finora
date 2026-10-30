@@ -35,11 +35,18 @@
 #include <string>
 #include <vector>
 
+#include "auth/AuthService.h"
+#include "auth/PasswordHasher.h"
 #include "core/Budget.h"
+#include "core/Session.h"
 #include "core/Transaction.h"
 #include "database/BudgetStore.h"
 #include "database/DatabaseManager.h"
+#include "ui/AppController.h"
+#include "ui/AuthWindow.h"
 #include "ui/BudgetDialog.h"
+#include "ui/components/PasswordField.h"
+#include "ui/components/RecoveryCodesPanel.h"
 #include "ui/BudgetsPage.h"
 #include "ui/DashboardPage.h"
 #include "ui/MainWindow.h"
@@ -925,6 +932,283 @@ void testAppearanceAfterRestart(TestCounter &counter, const QString &databasePat
     check(counter, "and in the light theme once light is saved", !window.isDarkTheme() && !isReducedMotion());
 }
 
+// =====================================================================
+//  Milestone 4, Phase 4B: the sign-in window and accounts
+// =====================================================================
+
+// Answers the "Records from before accounts" question with "Move them
+// into my account" (started with a 0 ms timer, like the other pop-ups).
+void acceptClaimQuestion()
+{
+    QMessageBox *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+    if (box == nullptr) {
+        return;
+    }
+    lastMessageText = box->text();
+    saveScreenshot(box, "claim_question");
+    findButton(box, "Move them into my account")->click();
+}
+
+void typePassword(QWidget *window, const QString &fieldName, const QString &text)
+{
+    window->findChild<PasswordField *>(fieldName)->lineEdit()->setText(text);
+}
+
+void typeText(QWidget *window, const QString &fieldName, const QString &text)
+{
+    window->findChild<QLineEdit *>(fieldName)->setText(text);
+}
+
+// The text of the first label with this object name that is not hidden.
+QString shownLabelText(QWidget *window, const QString &objectName)
+{
+    QList<QLabel *> labels = window->findChildren<QLabel *>(objectName);
+    for (int i = 0; i < labels.size(); i++) {
+        if (!labels[i]->isHidden()) {
+            return labels[i]->text();
+        }
+    }
+    return QString();
+}
+
+bool someLabelContains(QWidget *window, const QString &text)
+{
+    QList<QLabel *> labels = window->findChildren<QLabel *>();
+    for (int i = 0; i < labels.size(); i++) {
+        if (labels[i]->text().contains(text)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Signs up through the real form and returns the shown recovery codes.
+QStringList signUpThroughForm(QApplication &app, AuthWindow *authWindow, const QString &name,
+                              const QString &email, const QString &password)
+{
+    typeText(authWindow, "signUpName", name);
+    typeText(authWindow, "signUpEmail", email);
+    typePassword(authWindow, "signUpPassword", password);
+    typePassword(authWindow, "signUpConfirm", password);
+    findButton(authWindow, "Create account")->click();
+    app.processEvents();
+    return authWindow->findChild<RecoveryCodesPanel *>()->shownCodes();
+}
+
+void signInThroughForm(QApplication &app, AuthWindow *authWindow, const QString &email, const QString &password)
+{
+    typeText(authWindow, "signInEmail", email);
+    typePassword(authWindow, "signInPassword", password);
+    findButton(authWindow, "Sign in")->click();
+    app.processEvents();
+}
+
+void testAccountsWindow(TestCounter &counter, QApplication &app, const QString &folder,
+                        const QString &screenshotFolder)
+{
+    // One transaction recorded before accounts existed.
+    QString path = folder + "/ui_accounts.db";
+    {
+        DatabaseManager before("ui_accounts_before");
+        before.open(path);
+        Transaction groceries = makeTransaction(TYPE_EXPENSE, 250000, "PKR", "Food", "Groceries before accounts",
+                                                QDate::currentDate());
+        before.addTransaction(groceries);
+    }
+
+    Session session;
+    DatabaseManager database("ui_accounts");
+    database.open(path);
+    database.attachSession(session);
+    PasswordHasher fast(HASH_INTERACTIVE);   // fast for the tests; Finora uses MODERATE
+    AuthService auth(database, session, fast, fast);
+    AppController controller(database, auth, 600);
+    controller.start();
+    app.processEvents();
+    AuthWindow *authWindow = controller.authWindow();
+
+    // ---- Welcome and sign-up ----
+    check(counter, "Finora starts with the sign-in window, not the main window",
+          authWindow->isVisible() && controller.mainWindow() == nullptr);
+    check(counter, "with no account yet it shows the welcome page", authWindow->currentPage() == AuthWindow::PAGE_WELCOME);
+    check(counter, "the window says these are local demonstration accounts",
+          someLabelContains(authWindow, "Local demonstration accounts"));
+    if (!screenshotFolder.isEmpty()) {
+        authWindow->grab().save(screenshotFolder + "/b_auth_welcome.png");
+    }
+
+    findButton(authWindow, "Create an account")->click();
+    check(counter, "'Create an account' opens the sign-up page", authWindow->currentPage() == AuthWindow::PAGE_SIGN_UP);
+
+    PasswordField *newPassword = authWindow->findChild<PasswordField *>("signUpPassword");
+    newPassword->lineEdit()->setText("correcthorse");
+    check(counter, "the meter calls a letters-only password weak and gives a tip",
+          newPassword->strengthText() == QString::fromUtf8("Strength: Weak · Mix letters with numbers or symbols."));
+    newPassword->lineEdit()->setText("Correct Horse 9!");
+    check(counter, "the meter calls a long, mixed password very strong",
+          newPassword->strengthText() == "Strength: Very strong");
+
+    QPushButton *showButton = newPassword->findChild<QPushButton *>();
+    showButton->click();
+    bool shown = newPassword->lineEdit()->echoMode() == QLineEdit::Normal && showButton->accessibleName() == "Hide password";
+    showButton->click();
+    check(counter, "the eye button shows the password and hides it again",
+          shown && newPassword->lineEdit()->echoMode() == QLineEdit::Password);
+
+    typeText(authWindow, "signUpName", "Muhammad Saeed");
+    typeText(authWindow, "signUpEmail", "saeed@example.com");
+    typePassword(authWindow, "signUpConfirm", "Correct Horse 9?");
+    findButton(authWindow, "Create account")->click();
+    check(counter, "two different passwords are refused before anything is saved",
+          shownLabelText(authWindow, "formError") == "The two passwords are not the same." && !auth.hasAnyAccount());
+    if (!screenshotFolder.isEmpty()) {
+        authWindow->grab().save(screenshotFolder + "/b_auth_sign_up.png");
+    }
+
+    QStringList codes = signUpThroughForm(app, authWindow, "Muhammad Saeed", "saeed@example.com", "Correct Horse 9!");
+    check(counter, "the account is created and the recovery codes page appears",
+          authWindow->currentPage() == AuthWindow::PAGE_CODES && session.isSignedIn());
+    check(counter, "10 recovery codes are shown once", codes.size() == 10);
+    check(counter, "the password boxes were emptied after use",
+          newPassword->lineEdit()->text().isEmpty()
+              && authWindow->findChild<PasswordField *>("signUpConfirm")->lineEdit()->text().isEmpty());
+    QPushButton *continueButton = findButton(authWindow, "Continue to Finora");
+    check(counter, "Continue stays disabled until the codes are marked as saved", !continueButton->isEnabled());
+    if (!screenshotFolder.isEmpty()) {
+        authWindow->grab().save(screenshotFolder + "/b_auth_recovery_codes.png");
+    }
+    authWindow->findChild<QCheckBox *>("codesSavedBox")->click();
+    check(counter, "ticking 'I have saved these codes' enables Continue", continueButton->isEnabled());
+
+    // The question about the older records appears over the main window.
+    lastMessageText.clear();
+    QTimer::singleShot(0, acceptClaimQuestion);
+    continueButton->click();
+    app.processEvents();
+    MainWindow *mainWindow = controller.mainWindow();
+    check(counter, "after Continue the main window opens and the sign-in window hides",
+          mainWindow != nullptr && mainWindow->isVisible() && !authWindow->isVisible());
+    check(counter, "Finora asked before moving the record made before accounts",
+          lastMessageText.startsWith("This computer has 1 transaction and 0 budgets"));
+    if (mainWindow == nullptr) {
+        return;
+    }
+    DashboardPage *dashboard = mainWindow->findChild<DashboardPage *>("dashboardPage");
+    check(counter, "the dashboard greets the person by first name",
+          shownLabelText(dashboard, "pageTitle").endsWith(", Muhammad"));
+    check(counter, "the moved transaction now appears on the dashboard",
+          dashboard->findChild<QTableWidget *>("recentTable")->rowCount() == 1);
+    check(counter, "the sidebar shows who is signed in", shownLabelText(mainWindow, "accountName") == "Muhammad Saeed");
+    check(counter, "a toast welcomes the new person and reports the move",
+          toastText(mainWindow).startsWith("Welcome to Finora, Muhammad!")
+              && toastText(mainWindow).contains("1 transaction and 0 budgets moved into your account"));
+    saveWindowScreenshot(*mainWindow, screenshotFolder, "b_dashboard_signed_in");
+
+    QButtonGroup *navGroup = mainWindow->findChild<QButtonGroup *>("navButtonGroup");
+    navGroup->button(PAGE_SETTINGS)->click();
+    SettingsPage *settings = mainWindow->findChild<SettingsPage *>("settingsPage");
+    check(counter, "Settings shows the profile and the unused recovery codes",
+          someLabelContains(settings, "saeed@example.com")
+              && someLabelContains(settings, "10 of 10 recovery codes unused"));
+    saveWindowScreenshot(*mainWindow, screenshotFolder, "b_settings_account");
+
+    // ---- Sign out, wrong password, sign in again ----
+    Sidebar *sidebar = mainWindow->findChild<Sidebar *>();
+    findButton(sidebar, "Sign out")->click();
+    app.processEvents();
+    flushDeletedWidgets();
+    check(counter, "signing out closes the main window and shows the sign-in page",
+          controller.mainWindow() == nullptr && authWindow->isVisible()
+              && authWindow->currentPage() == AuthWindow::PAGE_SIGN_IN && !session.isSignedIn());
+    check(counter, "the sign-in page says the person signed out",
+          shownLabelText(authWindow, "infoBanner") == "You have signed out.");
+    std::vector<Transaction> rows;
+    check(counter, "signed out, Finora cannot load any records", !database.loadTransactions(rows));
+
+    signInThroughForm(app, authWindow, "saeed@example.com", "Wrong Horse 1!");
+    check(counter, "a wrong password shows only the general message",
+          shownLabelText(authWindow, "formError") == SIGN_IN_FAILED_MESSAGE && controller.mainWindow() == nullptr);
+    if (!screenshotFolder.isEmpty()) {
+        authWindow->grab().save(screenshotFolder + "/b_auth_sign_in_error.png");
+    }
+    signInThroughForm(app, authWindow, "saeed@example.com", "Correct Horse 9!");
+    mainWindow = controller.mainWindow();
+    check(counter, "the right password opens the main window with a welcome back",
+          mainWindow != nullptr && toastText(mainWindow).startsWith("Welcome back, Muhammad!"));
+    if (mainWindow == nullptr) {
+        return;
+    }
+    dashboard = mainWindow->findChild<DashboardPage *>("dashboardPage");
+    check(counter, "the same records are there after signing in again",
+          dashboard->findChild<QTableWidget *>("recentTable")->rowCount() == 1);
+
+    // ---- Forgot the password: a recovery code ----
+    findButton(mainWindow->findChild<Sidebar *>(), "Sign out")->click();
+    app.processEvents();
+    flushDeletedWidgets();
+    findButton(authWindow, "Forgot your password?")->click();
+    check(counter, "'Forgot your password?' opens the reset page", authWindow->currentPage() == AuthWindow::PAGE_RESET);
+    typeText(authWindow, "resetEmail", "saeed@example.com");
+    typeText(authWindow, "resetCode", codes[0]);
+    typePassword(authWindow, "resetPassword", "Brand New Pass 42!");
+    typePassword(authWindow, "resetConfirm", "Brand New Pass 42!");
+    if (!screenshotFolder.isEmpty()) {
+        authWindow->grab().save(screenshotFolder + "/b_auth_reset.png");
+    }
+    findButton(authWindow, "Set new password")->click();
+    app.processEvents();
+    check(counter, "a recovery code resets the password and says how many codes are left",
+          authWindow->currentPage() == AuthWindow::PAGE_SIGN_IN
+              && shownLabelText(authWindow, "infoBanner").contains("You have 9 recovery codes left"));
+    signInThroughForm(app, authWindow, "saeed@example.com", "Brand New Pass 42!");
+    check(counter, "the new password signs in", controller.mainWindow() != nullptr && session.isSignedIn());
+
+    // ---- A second person sees nothing of the first ----
+    findButton(controller.mainWindow()->findChild<Sidebar *>(), "Sign out")->click();
+    app.processEvents();
+    flushDeletedWidgets();
+    findButton(authWindow, "Create an account")->click();
+    signUpThroughForm(app, authWindow, "Ayesha Khan", "ayesha@example.com", "Sunflower Field 7!");
+    authWindow->findChild<QCheckBox *>("codesSavedBox")->click();
+    findButton(authWindow, "Continue to Finora")->click();   // no records without an owner are left: no question
+    app.processEvents();
+    mainWindow = controller.mainWindow();
+    check(counter, "a second account opens with its own, empty dashboard",
+          mainWindow != nullptr
+              && mainWindow->findChild<DashboardPage *>("dashboardPage")->findChild<QTableWidget *>("recentTable")->rowCount() == 0);
+    if (mainWindow != nullptr) {
+        findButton(mainWindow->findChild<Sidebar *>(), "Sign out")->click();
+        app.processEvents();
+        flushDeletedWidgets();
+    }
+}
+
+// Signs out by itself after the idle time: 1 second in this test.
+void testIdleSignOut(TestCounter &counter, QApplication &app, const QString &folder)
+{
+    Session session;
+    DatabaseManager database("ui_idle");
+    database.open(folder + "/ui_idle.db");
+    database.attachSession(session);
+    PasswordHasher fast(HASH_INTERACTIVE);
+    AuthService auth(database, session, fast, fast);
+    std::vector<std::string> codes;
+    std::string password = "Correct Horse 9!";
+    auth.signUp("Idle Tester", "idle@example.com", password, codes);
+    auth.signOut("signed_out");
+
+    AppController controller(database, auth, 1);
+    controller.start();
+    signInThroughForm(app, controller.authWindow(), "idle@example.com", "Correct Horse 9!");
+    check(counter, "the idle test signs in", controller.mainWindow() != nullptr);
+    waitFor(3500);
+    flushDeletedWidgets();
+    check(counter, "after the idle time Finora signs out by itself and says why",
+          controller.mainWindow() == nullptr && !session.isSignedIn()
+              && shownLabelText(controller.authWindow(), "infoBanner")
+                     == "For your security, Finora signed you out after 1 second without activity.");
+}
+
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
@@ -968,6 +1252,11 @@ int main(int argc, char *argv[])
     QString milestone4Path = temporaryFolder.path() + "/ui_test_m4.db";
     testDashboardAndBudgets(counter, app, milestone4Path, screenshotFolder);
     testAppearanceAfterRestart(counter, milestone4Path);
+
+    std::cout << "---- Milestone 4, Phase 4B: sign-in window and accounts ----\n";
+    check(counter, "libsodium starts", PasswordHasher::initializeLibrary());
+    testAccountsWindow(counter, app, temporaryFolder.path(), screenshotFolder);
+    testIdleSignOut(counter, app, temporaryFolder.path());
 
     std::cout << "----------------------\n";
     std::cout << counter.checksRun << " checks, " << counter.checksFailed << " failed\n";

@@ -28,13 +28,20 @@ bool BudgetStore::addBudget(Budget &budget)
         return false;
     }
 
+    // The new budget belongs to the signed-in person (see DatabaseManager::currentOwner).
+    QVariant owner;
+    if (!database.currentOwner(owner)) {
+        return fail(database.lastError());
+    }
+
     QSqlQuery query(QSqlDatabase::database(database.sqlConnectionName(), false));
     bool prepared = query.prepare(
-        "INSERT INTO budgets (category, currency_code, limit_minor) "
-        "VALUES (:category, :currency, :limit)");
+        "INSERT INTO budgets (user_id, category, currency_code, limit_minor) "
+        "VALUES (:owner, :category, :currency, :limit)");
     if (!prepared) {
         return fail("Could not prepare to save the budget: " + query.lastError().text());
     }
+    query.bindValue(":owner", owner);
     query.bindValue(":category", QString::fromStdString(budget.category));
     query.bindValue(":currency", QString::fromStdString(budget.currencyCode));
     query.bindValue(":limit", budget.limitMinor);
@@ -54,9 +61,16 @@ bool BudgetStore::loadBudgets(std::vector<Budget> &results)
         return fail("The database is not open.");
     }
 
+    QVariant owner;
+    if (!database.currentOwner(owner)) {
+        return fail(database.lastError());
+    }
+
     QSqlQuery query(QSqlDatabase::database(database.sqlConnectionName(), false));
-    if (!query.exec("SELECT id, category, currency_code, limit_minor FROM budgets "
-                    "ORDER BY lower(category), currency_code")) {
+    query.prepare("SELECT id, category, currency_code, limit_minor FROM budgets "
+                  "WHERE user_id IS :owner ORDER BY lower(category), currency_code");
+    query.bindValue(":owner", owner);
+    if (!query.exec()) {
         return fail("Could not load the budgets: " + query.lastError().text());
     }
 
@@ -89,10 +103,16 @@ bool BudgetStore::updateBudget(const Budget &budget)
         return false;
     }
 
+    QVariant owner;
+    if (!database.currentOwner(owner)) {
+        return fail(database.lastError());
+    }
+
+    // "AND user_id IS :owner": another person's budget id is simply "not found".
     QSqlQuery query(QSqlDatabase::database(database.sqlConnectionName(), false));
     bool prepared = query.prepare(
         "UPDATE budgets SET category = :category, currency_code = :currency, limit_minor = :limit, "
-        "updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = :id");
+        "updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = :id AND user_id IS :owner");
     if (!prepared) {
         return fail("Could not prepare to update the budget: " + query.lastError().text());
     }
@@ -100,6 +120,7 @@ bool BudgetStore::updateBudget(const Budget &budget)
     query.bindValue(":currency", QString::fromStdString(budget.currencyCode));
     query.bindValue(":limit", budget.limitMinor);
     query.bindValue(":id", budget.id);
+    query.bindValue(":owner", owner);
 
     if (!query.exec()) {
         return fail("Could not update the budget: " + query.lastError().text());
@@ -120,11 +141,17 @@ bool BudgetStore::deleteBudget(int id)
         return fail("A budget id must be a number above 0.");
     }
 
+    QVariant owner;
+    if (!database.currentOwner(owner)) {
+        return fail(database.lastError());
+    }
+
     QSqlQuery query(QSqlDatabase::database(database.sqlConnectionName(), false));
-    if (!query.prepare("DELETE FROM budgets WHERE id = :id")) {
+    if (!query.prepare("DELETE FROM budgets WHERE id = :id AND user_id IS :owner")) {
         return fail("Could not prepare to delete the budget: " + query.lastError().text());
     }
     query.bindValue(":id", id);
+    query.bindValue(":owner", owner);
 
     if (!query.exec()) {
         return fail("Could not delete the budget: " + query.lastError().text());
@@ -145,16 +172,24 @@ QString BudgetStore::lastError() const
 // The database has a UNIQUE index with the same rule as a second guard.
 bool BudgetStore::checkNoDuplicate(const Budget &budget)
 {
+    QVariant owner;
+    if (!database.currentOwner(owner)) {
+        return fail(database.lastError());
+    }
+
+    // Only this owner's budgets count: two people may both have a Food budget in PKR.
     QSqlQuery query(QSqlDatabase::database(database.sqlConnectionName(), false));
     bool prepared = query.prepare(
         "SELECT COUNT(*) FROM budgets "
-        "WHERE lower(category) = lower(:category) AND currency_code = :currency AND id <> :id");
+        "WHERE lower(category) = lower(:category) AND currency_code = :currency AND id <> :id "
+        "AND user_id IS :owner");
     if (!prepared) {
         return fail("Could not prepare to check the budgets: " + query.lastError().text());
     }
     query.bindValue(":category", QString::fromStdString(budget.category));
     query.bindValue(":currency", QString::fromStdString(budget.currencyCode));
     query.bindValue(":id", budget.id);
+    query.bindValue(":owner", owner);
 
     if (!query.exec() || !query.next()) {
         return fail("Could not check the budgets: " + query.lastError().text());

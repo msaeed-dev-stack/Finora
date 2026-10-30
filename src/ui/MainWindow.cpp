@@ -47,8 +47,8 @@ const PageInfo PAGE_INFO[PAGE_COUNT] = {
 
 // The initializer list sets the reference member `database` and builds
 // the BudgetStore member with the same database.
-MainWindow::MainWindow(DatabaseManager &sharedDatabase, QWidget *parent)
-    : QMainWindow(parent), database(sharedDatabase), budgetStore(sharedDatabase)
+MainWindow::MainWindow(DatabaseManager &sharedDatabase, AuthService *sharedAuth, QWidget *parent)
+    : QMainWindow(parent), database(sharedDatabase), auth(sharedAuth), budgetStore(sharedDatabase)
 {
     setWindowTitle("Finora");
     setWindowIcon(QIcon(":/icons/logo.svg"));
@@ -70,6 +70,14 @@ MainWindow::MainWindow(DatabaseManager &sharedDatabase, QWidget *parent)
     // automatically calls showPage(n), and so on.
     connect(sidebar, &Sidebar::pageSelected, this, &MainWindow::showPage);
     connect(sidebar, &Sidebar::themeToggleClicked, this, &MainWindow::toggleTheme);
+
+    // With accounts: the sidebar and the greeting show who is signed in.
+    if (auth != nullptr) {
+        connect(sidebar, &Sidebar::signOutClicked, this, &MainWindow::signOutRequested);
+        connect(settingsPage, &SettingsPage::signOutRequested, this, &MainWindow::signOutRequested);
+        connect(settingsPage, &SettingsPage::profileChanged, this, &MainWindow::showAccount);
+        showAccount();
+    }
 
     showPage(PAGE_DASHBOARD);   // the program always starts on the dashboard
 }
@@ -135,6 +143,14 @@ void MainWindow::setReducedMotionEnabled(bool reduced)
     }
 }
 
+// The signed-in person's name in the sidebar and in the dashboard greeting.
+void MainWindow::showAccount()
+{
+    const Session &session = auth->session();
+    sidebar->showAccount(QString::fromStdString(session.displayName()), QString::fromStdString(session.email()));
+    dashboardPage->setUserName(QString::fromStdString(session.firstName()));
+}
+
 void MainWindow::toggleTheme()
 {
     setDarkTheme(!isDarkTheme());
@@ -180,9 +196,9 @@ void MainWindow::createPages()
 
         switch (pageNumber) {
         case PAGE_DASHBOARD: {
-            DashboardPage *dashboard = new DashboardPage(database, budgetStore, pageStack);
-            connect(dashboard, &DashboardPage::openPageRequested, this, &MainWindow::showPage);
-            page = dashboard;
+            dashboardPage = new DashboardPage(database, budgetStore, pageStack);
+            connect(dashboardPage, &DashboardPage::openPageRequested, this, &MainWindow::showPage);
+            page = dashboardPage;
             break;
         }
         case PAGE_TRANSACTIONS:
@@ -192,7 +208,7 @@ void MainWindow::createPages()
             page = new BudgetsPage(database, budgetStore, pageStack);
             break;
         case PAGE_SETTINGS:
-            settingsPage = new SettingsPage(database, pageStack);
+            settingsPage = new SettingsPage(database, auth, pageStack);
             connect(settingsPage, &SettingsPage::darkThemeChosen, this, &MainWindow::setDarkTheme);
             connect(settingsPage, &SettingsPage::reducedMotionChosen, this, &MainWindow::setReducedMotionEnabled);
             page = settingsPage;

@@ -2,7 +2,7 @@
 
 A 12-minute script for showing Phase 4A to classmates or to the instructor: the dashboard, budgets, the light and dark themes, and the safe database upgrade. Each step says what to do, what the audience should see, and what to say.
 
-Phase 4B (sign-in and accounts) and Phase 4C (subscription plans) are **planned and not yet implemented**. Do not show or describe them as working.
+Phase 4B (accounts) is described at the end of this guide. Phase 4C (subscription plans) is **planned and not yet implemented**. Do not show or describe it as working.
 
 ## Before the demonstration
 
@@ -34,6 +34,25 @@ Phase 4B (sign-in and accounts) and Phase 4C (subscription plans) are **planned 
 | 15 | Open **Settings**, tick **Reduce motion**, then click **Light** | Changes appear at once, without fading | "This helps people who find animations uncomfortable." |
 | 16 | Click **View font licences** | The full SIL Open Font License texts of Inter and Manrope | "Both fonts are open source. Their licences ship with the program." |
 | 17 | Close Finora and start it again | Finora opens in the theme you left it in | "The theme is saved in the `app_settings` table." |
+
+## Phase 4B: accounts (about 8 minutes)
+
+Finora now starts with the sign-in window. If this computer has no account yet, it shows "Welcome to Finora".
+
+| # | Do this | The audience sees | Say this |
+|---|---|---|---|
+| B1 | Point at the violet panel | "Local demonstration accounts: your account, password and records stay on this computer." | "Accounts are real but local: no server, no email." |
+| B2 | Click **Create an account**; type a name and email; type `correcthorse` as the password | The meter: "Strength: Weak · Mix letters with numbers or symbols." | "The meter is plain C++ in `PasswordPolicy.cpp`; the words always say the strength." |
+| B3 | Change it to `Correct Horse 9!`, click the eye button, then click it again | "Very strong"; the password shows, then hides | "The eye is a real button, so the Tab key reaches it." |
+| B4 | Repeat the password and click **Create account** | A short "Creating your account...", then 10 recovery codes | "The password is hashed with Argon2id: 256 MiB and 3 passes, about two thirds of a second. Only the hash is stored." |
+| B5 | Point at the codes, tick "I have saved these codes", click **Continue to Finora** | If older records exist: "Move them into my account?" with "Not now" as the default | "Finora never moves older records without asking." |
+| B6 | Show the dashboard and the sidebar | "Good evening, Muhammad"; initials, name and email; Sign out | "The Session knows who is signed in; only AuthService can change it." |
+| B7 | Click **Sign out**, then sign in with a wrong password | "The email or password is not correct." | "The same words for an unknown email, so nobody learns which accounts exist." |
+| B8 | Click **Forgot your password?** and use one of the codes | "Your password was changed. You have 9 recovery codes left." | "A code works once; it is marked as used in the same transaction." |
+| B9 | Create a second account and open its dashboard | Empty wallets and no transactions | "Every query says `user_id IS :owner`; the second person cannot even find the first person's records by id." |
+| B10 | Open **Settings** | Profile, Security (codes left, session limits) | "Finora signs out after 15 minutes without activity and after 12 hours." |
+
+What to show in the code for Phase 4B: `Session.h` (the friend class), `AuthService::signIn` (the general message and the dummy hash), `DatabaseManager::currentOwner`, and `third_party/libsodium-1.0.22/VERIFICATION.md`.
 
 ## What to show in the code
 

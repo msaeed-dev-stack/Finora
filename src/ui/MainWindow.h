@@ -12,9 +12,11 @@
 
 #include <vector>
 
+#include "DashboardPage.h"
 #include "Page.h"
 #include "SettingsPage.h"
 #include "Sidebar.h"
+#include "auth/AuthService.h"
 #include "database/BudgetStore.h"
 #include "database/DatabaseManager.h"
 
@@ -26,9 +28,15 @@ public:
     // `sharedDatabase` is the one DatabaseManager created in main(). The
     // window passes it on to the pages; it does not own it. The window
     // first applies the theme and motion setting saved in the database.
-    MainWindow(DatabaseManager &sharedDatabase, QWidget *parent = nullptr);
+    // `sharedAuth` is the signed-in person's AuthService, or nullptr when
+    // Finora runs without accounts (the tests of Milestones 1 to 4A).
+    MainWindow(DatabaseManager &sharedDatabase, AuthService *sharedAuth = nullptr, QWidget *parent = nullptr);
 
     bool isDarkTheme() const;
+
+signals:
+    // "Sign out" was clicked in the sidebar or in Settings.
+    void signOutRequested();
 
 public slots:
     // Shows the page with the given number, highlights its button and
@@ -45,6 +53,7 @@ public slots:
 private slots:
     void toggleTheme();
     void onPageFadeFinished();
+    void showAccount();
 
 private:
     void applySavedAppearance();
@@ -54,7 +63,9 @@ private:
     void fadeInPage(QWidget *page);
 
     DatabaseManager &database;   // created in main(); the window only uses it
+    AuthService *auth = nullptr; // the account service, or nullptr without accounts
     BudgetStore budgetStore;     // the budget part of the same database
+    DashboardPage *dashboardPage = nullptr;
     Sidebar *sidebar = nullptr;
     QStackedWidget *pageStack = nullptr;
     SettingsPage *settingsPage = nullptr;

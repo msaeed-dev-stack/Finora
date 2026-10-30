@@ -11,9 +11,11 @@
 
 #include <QString>
 #include <QStringList>
+#include <QVariant>
 
 #include <vector>
 
+#include "core/Session.h"
 #include "core/Transaction.h"
 
 // The newest table layout this version of Finora understands.
@@ -74,6 +76,26 @@ public:
     // classes of finora_database use it to run their own SQL.
     QString sqlConnectionName() const;
 
+    // ---- Whose records (Phase 4B) ----
+
+    // Connects the database to the Session of the running program. From
+    // then on every transaction, budget and setting belongs to the person
+    // who is signed in, and no records can be reached while nobody is
+    // signed in. Without a Session (the tests of Milestones 2 to 4A), only
+    // the records that belong to no account are used.
+    void attachSession(const Session &session);
+
+    // The owner of the rows this connection may use now, for SQL such as
+    // "WHERE user_id IS :owner": a null value (SQL NULL, "no account")
+    // when no Session is attached, otherwise the signed-in user's id.
+    // Returns false, with "Please sign in first.", if a Session is
+    // attached but nobody is signed in. The id never comes from the
+    // user interface, only from the Session.
+    bool currentOwner(QVariant &ownerId);
+
+    // The signed-in user's id, or false if nobody is signed in.
+    bool signedInUserId(int &userId) const;
+
     // The schema version stored in the file, or -1 on error.
     int schemaVersion();
 
@@ -100,7 +122,10 @@ public:
     // Deletes the transaction with the given id.
     bool deleteTransaction(int id);
 
-    // ---- Settings of this Finora installation, such as the theme ----
+    // ---- Settings, such as the theme ----
+    // While someone is signed in, these are that person's own settings
+    // (user_settings); otherwise the settings of this Finora installation
+    // (app_settings), which the sign-in window uses.
 
     // The saved value of `key`, or `defaultValue` if it was never saved.
     QString setting(const QString &key, const QString &defaultValue);
@@ -111,7 +136,8 @@ public:
     // ---- History of important events ----
 
     // Adds one line to the audit_events table, for example
-    // ("database_upgraded", "Schema version 1 to 2").
+    // ("database_upgraded", "Schema version 1 to 2"), for the signed-in
+    // person or for no account.
     bool recordAuditEvent(const QString &eventType, const QString &details);
 
 private:
@@ -132,6 +158,7 @@ private:
     QString backupPath;       // the copy saved by the last upgrade, or empty
     QString errorMessage;     // explains the most recent failure
     bool opened = false;      // true only while this object owns an open connection
+    const Session *attachedSession = nullptr;   // whose records; nullptr = records without an owner
 };
 
 #endif // FINORA_DATABASEMANAGER_H

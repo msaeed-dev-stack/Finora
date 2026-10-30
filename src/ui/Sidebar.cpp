@@ -53,6 +53,40 @@ Sidebar::Sidebar(QWidget *parent)
     createNavButtons(layout);
     layout->addStretch();   // empty space pushes the theme switch to the bottom
 
+    // Who is signed in, and Sign out (shown by showAccount()).
+    accountArea = new QFrame(this);
+    accountArea->setObjectName("accountArea");
+    avatarLabel = new QLabel(accountArea);
+    avatarLabel->setObjectName("avatar");
+    avatarLabel->setFixedSize(34, 34);
+    avatarLabel->setAlignment(Qt::AlignCenter);
+    accountNameLabel = new QLabel(accountArea);
+    accountNameLabel->setObjectName("accountName");
+    accountEmailLabel = new QLabel(accountArea);
+    accountEmailLabel->setObjectName("accountEmail");
+    QVBoxLayout *accountText = new QVBoxLayout();
+    accountText->setSpacing(0);
+    accountText->addWidget(accountNameLabel);
+    accountText->addWidget(accountEmailLabel);
+    QHBoxLayout *accountRow = new QHBoxLayout();
+    accountRow->setSpacing(10);
+    accountRow->addWidget(avatarLabel);
+    accountRow->addLayout(accountText, 1);
+    signOutButton = new QPushButton("Sign out", accountArea);
+    signOutButton->setObjectName("themeToggle");
+    signOutButton->setIconSize(QSize(18, 18));
+    signOutButton->setCursor(Qt::PointingHandCursor);
+    signOutButton->setAccessibleName("Sign out");
+    QVBoxLayout *accountLayout = new QVBoxLayout(accountArea);
+    accountLayout->setContentsMargins(0, 0, 0, 0);
+    accountLayout->setSpacing(8);
+    accountLayout->addLayout(accountRow);
+    accountLayout->addWidget(signOutButton);
+    connect(signOutButton, &QPushButton::clicked, this, &Sidebar::signOutClicked);
+    accountArea->hide();
+    layout->addWidget(accountArea);
+    layout->addSpacing(8);
+
     themeButton = new QPushButton(this);
     themeButton->setObjectName("themeToggle");
     themeButton->setIconSize(QSize(18, 18));
@@ -86,6 +120,7 @@ void Sidebar::refreshTheme()
 
     // The button offers the OTHER theme: a moon in the light theme, a sun in the dark one.
     const ThemeColors &colors = themeColors();
+    signOutButton->setIcon(QIcon(tintedIcon("log_out", colors.text, 18)));
     if (currentThemeMode() == THEME_DARK) {
         themeButton->setText("Light mode");
         themeButton->setIcon(QIcon(tintedIcon("sun", colors.text, 18)));
@@ -95,6 +130,21 @@ void Sidebar::refreshTheme()
         themeButton->setIcon(QIcon(tintedIcon("moon", colors.text, 18)));
         themeButton->setAccessibleName("Switch to the dark theme");
     }
+}
+
+void Sidebar::showAccount(const QString &displayName, const QString &email)
+{
+    // The avatar shows the first letter of the first two words of the name.
+    QStringList words = displayName.split(' ', Qt::SkipEmptyParts);
+    QString initials;
+    for (int i = 0; i < words.size() && i < 2; i++) {
+        initials += words[i].left(1).toUpper();
+    }
+    avatarLabel->setText(initials);
+    accountNameLabel->setText(displayName);
+    accountEmailLabel->setText(email);
+    accountArea->setAccessibleName("Signed in as " + displayName + ", " + email);
+    accountArea->show();
 }
 
 void Sidebar::onNavButtonClicked(int pageNumber)

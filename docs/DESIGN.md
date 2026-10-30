@@ -2,7 +2,7 @@
 
 This document explains how Finora is organised and how its algorithms work. It describes only what exists in the code. Anything not built yet is marked **Planned — Not Yet Implemented**.
 
-Last updated: Milestone 4, Phase 4A, 30 October 2026.
+Last updated: Milestone 4, Phase 4B, 30 October 2026.
 
 ## 1. Architecture
 
@@ -728,3 +728,147 @@ void MainWindow::showPage(int pageNumber)
 ```
 
 `MainWindow` never asks which page it is talking to. C++ looks up the right `refresh()` at run time through the virtual function. `TransactionsPage::refresh()` reloads its table, `DashboardPage::refresh()` redraws every card, and `PlaceholderPage::refresh()` only recolours its icon.
+
+## 11. Milestone 4, Phase 4B: accounts and security
+
+### 11.1 Who does what
+
+| Part | Layer | Job |
+|---|---|---|
+| `PasswordPolicy` | core | Password rules (10 to 128 characters, not common, no name or email) and the strength meter |
+| `AccountRules` | core | Email and name rules, the recovery code alphabet and format, the waiting time after wrong passwords, session limits |
+| `Session` | core | Who is signed in. Its changing functions are private; `AuthService` is its only friend class |
+| `PasswordHasher` | auth | Argon2id hash and verify, `needsRehash`, new recovery codes, `wipe()`. The only code that uses libsodium |
+| `AuthService` | auth | The account rules: sign-up, sign-in, sign-out, sessions, profile, password change, recovery, claiming older records |
+| `UserStore` | database | All account SQL, used only by `AuthService` |
+| `DatabaseManager`, `BudgetStore` | database | Every transaction and budget query is limited to the owner taken from the attached `Session` |
+| `AppController` | ui | Shows the sign-in window or the main window; signs out after inactivity |
+| `AuthWindow`, `AccountDialogs`, `PasswordField`, `RecoveryCodesPanel` | ui | The screens |
+
+```mermaid
+flowchart LR
+    UI["AuthWindow, Settings, AppController"] --> AS["AuthService"]
+    AS --> PH["PasswordHasher"]
+    PH --> SOD[("libsodium-26.dll")]
+    AS --> US["UserStore"]
+    AS -- "the only class that may change it" --> SES["Session"]
+    Pages["Dashboard, Transactions, Budgets"] --> DBM["DatabaseManager and BudgetStore"]
+    DBM -- "reads the owner from" --> SES
+    US --> DB[("finora.db")]
+    DBM --> DB
+```
+
+### 11.2 Start-up
+
+```mermaid
+flowchart TD
+    A([Finora.exe]) --> B{"libsodium starts?"}
+    B -- No --> X([Error message, exit code 1])
+    B -- Yes --> C["Lock, upgrade question, open the database (sections 2 and 10.3)"]
+    C --> D["Session session; database.attachSession(session)"]
+    D --> E["AuthService with MODERATE (passwords) and INTERACTIVE (codes)"]
+    E --> F["AppController shows the sign-in window"]
+    F --> G{"Signed in?"}
+    G -- Yes --> H["Main window with the person's own data"]
+    H -- "Sign out, 15 minutes idle or 12 hours" --> F
+```
+
+### 11.3 Signing in
+
+```text
+signIn(email, password):
+    address = normalizeEmail(email)                     // trimmed, small letters
+    find the account with this email
+    IF there is none THEN
+        IF this email already failed 3 times recently THEN wipe password; RETURN "Too many attempts..."
+        verify the password against a dummy Argon2id hash   // the same work as a real account
+        count one failure for this email (in memory); wipe password
+        RETURN "The email or password is not correct."
+    IF the account must still wait (locked_until in the future) THEN
+        wipe password; RETURN "Too many attempts. Please wait N seconds and try again."
+    IF NOT verify(stored hash, password) THEN
+        failures = failures + 1; waiting time = signInDelaySeconds(failures)
+        save both and an audit event; wipe password
+        RETURN "The email or password is not correct."
+    IF the stored hash uses older settings THEN replace it with a MODERATE hash
+    wipe password; reset the failures; start a session row; session.start(...)
+```
+
+The two messages are word-for-word the same for a wrong password and an unknown email, and both get the same waiting times, so nobody can find out which emails have accounts.
+
+### 11.4 Creating an account
+
+```text
+signUp(name, email, password):
+    check name, email and password (PasswordPolicy); refuse an email that already has an account
+    hash = Argon2id MODERATE(password)        // stop with a clear message if memory is missing
+    wipe password
+    make 10 random codes (randombytes_uniform); hash each with Argon2id INTERACTIVE
+    ONE database transaction: the user row, the settings copied from this installation,
+                              the 10 code hashes, the audit event
+    start the session; return the 10 codes in plain text, to be shown ONCE
+```
+
+### 11.5 One person's data per account
+
+```text
+DatabaseManager::currentOwner(owner):
+    IF no Session is attached THEN owner = NULL; RETURN true   // the tests of Milestones 2 to 4A
+    IF nobody is signed in      THEN RETURN false: "Please sign in first."
+    owner = session.userId(); RETURN true
+
+every query:  ... WHERE ... AND user_id IS :owner
+every insert: ... (user_id, ...) VALUES (:owner, ...)
+```
+
+- `IS` works for NULL and for numbers, so one SQL text serves both cases.
+- Another person's record id behaves exactly like an id that does not exist: "not found".
+- No function takes a user id from the screen. The id comes only from the `Session`, and only `AuthService`, after checking a password, can put an id into it.
+
+### 11.6 Sessions
+
+| Event | What happens | `login_sessions.end_reason` |
+|---|---|---|
+| Sign out (sidebar or Settings) | The session ends; the sign-in window says "You have signed out." | `signed_out` |
+| 15 minutes without a key press or mouse action | `AppController` closes any open dialog, signs out, and explains why | `idle` |
+| 12 hours after signing in | Checked once a minute while active | `expired` |
+| Finora closes | `main()` ends the session after the event loop | `app_closed` |
+| Finora crashed | The next start closes sessions left open | `interrupted` |
+| Password reset with a code | All open sessions of the account end | `password_reset` |
+
+### 11.7 Recovery codes
+
+```text
+resetPasswordWithRecoveryCode(email, code, newPassword):
+    check newPassword against the policy (without the account, so nothing is revealed)
+    find the account; unknown or waiting: the same work and the same general message
+    FOR each UNUSED code hash of this account
+        IF verify(code hash, code) THEN remember its id; stop
+    none matched: count a failure; RETURN "The email or recovery code is not correct."
+    ONE transaction: mark the code used (only if still unused), store the new password hash,
+                     clear the failures, end the open sessions, write an audit event
+```
+
+### 11.8 Records made before accounts existed
+
+They keep `user_id = NULL`, so no account sees them.
+
+- Right after sign-up, Finora asks: "Move them into my account?" The default button is "Not now". Settings offers the same move later.
+- `claimRecordsWithoutOwner` runs in one transaction:
+  1. It moves the transactions and proves none is left behind.
+  2. It moves the budgets, but keeps out any budget whose category and currency the account already has.
+  3. It writes an audit event.
+
+### 11.9 Security requirements and where they are met
+
+| Requirement | How |
+|---|---|
+| Never store plaintext passwords | Only `crypto_pwhash_str` output is stored. A test searches every table, every column and the raw file bytes for the password: not found |
+| Unique random salts | `crypto_pwhash_str` makes a new 16-byte salt for every hash; two accounts with the same password have different hashes (tested) |
+| MODERATE settings, documented | `PasswordHasher(HASH_MODERATE)` in `main.cpp`; values and timings in `docs/MILESTONE4_PROGRESS.md` |
+| Memory use tested, failures handled | Peak memory measured at about 265 MiB per hash and returned afterwards; a 512 GiB setting fails cleanly and no account is created (tested) |
+| Recovery codes hashed | Argon2id INTERACTIVE; no code in plain text anywhere in the database (tested) |
+| Short plaintext lifetime | Password boxes are emptied when read; every password parameter is a `std::string &` that `wipe()` overwrites with zeros |
+| No user id from the interface | The owner comes only from the `Session`, which only `AuthService` can change (friend class) |
+| Records belong to the signed-in person | `user_id IS :owner` in every transaction and budget query; isolation tested with two accounts |
+| Existing records preserved | No new migration; older records move only with consent, in one verified transaction |

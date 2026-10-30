@@ -37,6 +37,9 @@ public:
     // Used by the tests and by the "+ Add Transaction" button.
     bool saveNewTransaction(Transaction &transaction);
 
+    // The signed-in person's first name for the greeting, or "" without accounts.
+    void setUserName(const QString &firstName);
+
     MonthSwitcher *monthSwitcher() const;
     MoneyFlowChart *chart() const;
     WalletCard *walletCard(const QString &currencyCode) const;
@@ -77,6 +80,7 @@ private:
     std::vector<Transaction> transactions;
     std::vector<Budget> budgets;
     int alertCount = 0;
+    QString userFirstName;
 
     QLabel *greetingLabel = nullptr;
     MonthSwitcher *switcher = nullptr;

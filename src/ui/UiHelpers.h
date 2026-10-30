@@ -19,6 +19,9 @@ QString currentMonth();
 QString monthTitle(const QString &month);
 QString shortMonthName(const QString &month);
 
+// "1 transaction" or "3 transactions": the number with the right word.
+QString countText(int count, const QString &singular, const QString &plural);
+
 // formatMoney() from core/Money.h as a QString: "PKR 1,200.50".
 QString moneyText(const std::string &currencyCode, long long amountMinor);
 
