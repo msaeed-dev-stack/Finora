@@ -9,8 +9,10 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QSqlDatabase>
 #include <QSqlQuery>
+#include <QSysInfo>
 #include <QTemporaryDir>
 #include <QVariant>
 
@@ -19,6 +21,7 @@
 
 #include "core/Transaction.h"
 #include "database/DatabaseManager.h"
+#include "database/InstanceLock.h"
 
 // Counts how many checks ran and how many of them failed.
 struct TestCounter {
@@ -456,6 +459,160 @@ void testDatabaseRules(TestCounter &counter, const QString &folder)
           queryNumber(name, "SELECT COUNT(*) FROM transactions") == 1);
 }
 
+// The single-instance lock that main() takes before opening the database.
+// Two InstanceLock objects for the same file behave like two copies of
+// Finora: the second one must be refused while the first holds the lock.
+void testInstanceLock(TestCounter &counter, const QString &folder)
+{
+    check(counter, "the lock file sits next to the database",
+          InstanceLock::lockPathFor(folder + "/data/finora.db") == folder + "/data/finora.lock",
+          InstanceLock::lockPathFor(folder + "/data/finora.db"));
+    check(counter, "no database path gives no lock path", InstanceLock::lockPathFor("").isEmpty());
+
+    // The data folder does not exist yet, as on the very first start.
+    QString lockPath = folder + "/lock_test/finora.lock";
+    {
+        InstanceLock first(lockPath);
+        check(counter, "the first copy gets the lock", first.tryLock(), first.lastError());
+        check(counter, "the lock file now exists", QFileInfo::exists(lockPath));
+        check(counter, "asking again from the same copy still succeeds",
+              first.tryLock() && first.isLocked(), first.lastError());
+
+        InstanceLock second(lockPath);
+        check(counter, "a second copy is refused while the first one runs", !second.tryLock());
+        check(counter, "the second copy knows another copy holds the lock",
+              second.heldByAnotherCopy() && !second.isLocked());
+        showMessage(second.lastError());
+        check(counter, "the first copy still holds the lock", first.isLocked());
+    }   // `first` is destroyed here and releases the lock (RAII)
+
+    check(counter, "the lock file is deleted when the first copy closes",
+          !QFileInfo::exists(lockPath));
+    {
+        InstanceLock later(lockPath);
+        check(counter, "a new copy gets the lock after the first one closed",
+              later.tryLock(), later.lastError());
+    }
+
+    // A lock file left behind by a crash: it names a program that is no
+    // longer running. 999999 is not a running program's number (Windows
+    // numbers are always multiples of 4). Qt reads this file and sees
+    // that the lock was abandoned.
+    QString crashedPath = folder + "/crashed.lock";
+    writeFile(crashedPath, "999999\nFinora\n" + QSysInfo::machineHostName().toUtf8() + "\n");
+    {
+        InstanceLock afterCrash(crashedPath);
+        check(counter, "a lock left behind by a crash is taken over",
+              afterCrash.tryLock(), afterCrash.lastError());
+    }
+
+    // A FILE sits where the data folder should be, so no lock file can
+    // be created. This is a real error, not "already running".
+    QString blocker = folder + "/lock_blocker";
+    writeFile(blocker, "This file sits where a folder is needed.");
+    {
+        InstanceLock blocked(blocker + "/finora.lock");
+        check(counter, "a lock file that cannot be created is refused", !blocked.tryLock());
+        check(counter, "that failure is not reported as \"already running\"",
+              !blocked.heldByAnotherCopy());
+        showMessage(blocked.lastError());
+    }
+}
+
+// Milestone 3: loading every transaction, updating one, deleting one.
+void testLoadUpdateDelete(TestCounter &counter, const QString &folder)
+{
+    QString path = folder + "/manage.db";
+    DatabaseManager database("test_manage");
+    database.open(path);
+
+    Transaction october1 = makeSampleTransaction();
+    october1.date = "2026-10-01";
+    october1.description = "First";
+    Transaction october15a = makeSampleTransaction();
+    october15a.date = "2026-10-15";
+    october15a.description = "Second";
+    Transaction october15b = makeSampleTransaction();
+    october15b.date = "2026-10-15";
+    october15b.description = "Third";
+    bool added = database.addTransaction(october1) && database.addTransaction(october15a)
+                 && database.addTransaction(october15b);
+    check(counter, "three transactions are saved for the management tests", added, database.lastError());
+
+    // Loading: newest date first; for the same date, the later id first.
+    std::vector<Transaction> loaded;
+    bool loadedOk = database.loadTransactions(loaded);
+    check(counter, "loadTransactions reads all 3 rows", loadedOk && loaded.size() == 3, database.lastError());
+    check(counter, "rows come newest first, then the later id first",
+          loaded.size() == 3 && loaded[0].description == "Third" && loaded[1].description == "Second"
+              && loaded[2].description == "First");
+
+    // Updating a transaction.
+    Transaction changed = october15a;
+    changed.type = TYPE_INCOME;
+    changed.amountMinor = 999950;
+    changed.currencyCode = "USD";
+    changed.category = "Freelance";
+    changed.description = "Logo design for Sana's shop";
+    changed.date = "2026-10-20";
+    check(counter, "a valid update is saved", database.updateTransaction(changed), database.lastError());
+    Transaction afterUpdate;
+    database.findTransactionById(changed.id, afterUpdate);
+    check(counter, "every changed field is read back", sameTransaction(changed, afterUpdate));
+
+    Transaction invalid = changed;
+    invalid.amountMinor = 0;
+    check(counter, "an update with amount 0 is refused", !database.updateTransaction(invalid));
+    showMessage(database.lastError());
+    Transaction afterRefusal;
+    database.findTransactionById(changed.id, afterRefusal);
+    check(counter, "the refused update changed nothing", sameTransaction(changed, afterRefusal));
+
+    Transaction missing = changed;
+    missing.id = 999;
+    check(counter, "updating id 999 fails because it does not exist", !database.updateTransaction(missing));
+    showMessage(database.lastError());
+    missing.id = 0;
+    check(counter, "updating id 0 is refused", !database.updateTransaction(missing));
+
+    // Deleting a transaction.
+    check(counter, "deleting an existing transaction works",
+          database.deleteTransaction(october1.id), database.lastError());
+    Transaction gone;
+    check(counter, "the deleted transaction cannot be found", !database.findTransactionById(october1.id, gone));
+    check(counter, "deleting it again fails with a clear message", !database.deleteTransaction(october1.id));
+    showMessage(database.lastError());
+    check(counter, "deleting id 0 is refused", !database.deleteTransaction(0));
+
+    // AUTOINCREMENT: deleting the newest row must not free its id for reuse.
+    int highestId = october15b.id;
+    database.deleteTransaction(highestId);
+    Transaction next = makeSampleTransaction();
+    database.addTransaction(next);
+    check(counter, "a new transaction never reuses a deleted id", next.id > highestId,
+          "new id " + QString::number(next.id) + ", deleted id " + QString::number(highestId));
+
+    // The changes are kept after closing and reopening the file.
+    database.close();
+    DatabaseManager reopened("test_manage_reopen");
+    reopened.open(path);
+    std::vector<Transaction> afterRestart;
+    reopened.loadTransactions(afterRestart);
+    Transaction updatedAfterRestart;
+    bool updateKept = reopened.findTransactionById(changed.id, updatedAfterRestart)
+                      && sameTransaction(changed, updatedAfterRestart);
+    check(counter, "after reopening: 2 rows remain and the update is kept",
+          afterRestart.size() == 2 && updateKept);
+
+    // Every operation fails clearly on a database that is not open.
+    DatabaseManager closedDatabase("test_manage_closed");
+    std::vector<Transaction> none;
+    check(counter, "loading from a closed database fails", !closedDatabase.loadTransactions(none));
+    check(counter, "updating in a closed database fails", !closedDatabase.updateTransaction(changed));
+    check(counter, "deleting in a closed database fails", !closedDatabase.deleteTransaction(1));
+    showMessage(closedDatabase.lastError());
+}
+
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
@@ -486,6 +643,8 @@ int main(int argc, char *argv[])
     testOpenFailures(counter, folder);
     testPersistence(counter, folder);
     testDatabaseRules(counter, folder);
+    testInstanceLock(counter, folder);
+    testLoadUpdateDelete(counter, folder);
 
     std::cout << "---------------------\n";
     std::cout << counter.checksRun << " checks, " << counter.checksFailed << " failed\n";

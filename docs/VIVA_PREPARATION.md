@@ -4,7 +4,7 @@ Questions your Programming Fundamentals instructor may ask about Finora, with an
 
 Features that are not built yet are marked **Planned — Not Yet Implemented**. Never present them as finished.
 
-Last updated: Milestone 2, 28 October 2026.
+Last updated: Milestone 3, 30 October 2026.
 
 **How to use this file.** Read the short answer first. Then open the file named under "Where in the code" and find the lines yourself. If you cannot explain a line, study it before the viva.
 
@@ -14,7 +14,7 @@ Last updated: Milestone 2, 28 October 2026.
 
 ### A1. What is Finora?
 - **Short answer:** A Windows desktop program for personal finance and budgeting, written in C++17 with Qt 6 Widgets and a SQLite database.
-- **Detailed explanation:** Finora will record income and expenses, track monthly budgets and savings goals, and handle PKR, USD and EUR without mixing them. At Milestone 2 the window, navigation, theme, database and tests work. The finance screens are planned, and every page says which milestone adds it.
+- **Detailed explanation:** Finora will record income and expenses, track monthly budgets and savings goals, and handle PKR, USD and EUR without mixing them. At Milestone 3 the window, navigation, theme, database, single-copy guard and the Transactions page work. The other finance pages are planned, and each says which milestone adds it.
 - **Where in the code:** `src/main.cpp` starts the program; `src/database/DatabaseManager.cpp` handles the data.
 
 ### A2. What problem does it solve?
@@ -26,8 +26,8 @@ Last updated: Milestone 2, 28 October 2026.
 - **Detailed explanation:** Freelancers often earn in USD or EUR and spend in PKR, which is why the database already stores a currency with every transaction.
 
 ### A4. What are the main features?
-- **Short answer:** Done: navigation, theme, database, validation and tests. Planned: the transaction, budget, goal, currency and report screens.
-- **Detailed explanation:** See the feature table in `README.md`. The database can already save and read transactions, which the tests prove, but there is no screen to enter them until Milestone 3.
+- **Short answer:** Done: navigation, theme, database, validation, and the Transactions page with add, edit, delete, search and filters. Planned: dashboard, budget, goal, currency and report pages.
+- **Detailed explanation:** See the feature table in `README.md` and section K of this guide.
 
 ### A5. What are the scope and limitations?
 - **Short answer:** One user on one Windows computer, offline, three currencies, exchange rates typed in by hand.
@@ -64,7 +64,7 @@ Last updated: Milestone 2, 28 October 2026.
 
 ### B6. Where did you use strings, arrays, structures or vectors?
 - **Short answer:** Structures for transactions and currencies; arrays of structures for buttons, pages, currencies and test cases; strings everywhere. Vectors are not used yet.
-- **Detailed explanation:** `struct Transaction` holds one record. `SUPPORTED_CURRENCIES` is an array of 3 `CurrencyInfo` structures and is used both to validate codes and to fill the `currencies` table. `std::vector` is **Planned — Not Yet Implemented** (Milestone 3, the list of transactions).
+- **Detailed explanation:** `struct Transaction` holds one record. `SUPPORTED_CURRENCIES` is an array of 3 `CurrencyInfo` structures and is used both to validate codes and to fill the `currencies` table. Since Milestone 3, a `std::vector<Transaction>` holds the list loaded from SQLite: `loadTransactions` fills it with `push_back`, and `filterTransactions` returns a new vector with only the matching transactions.
 
 ### B7. How do parameters, return values and function calls work in your code?
 - **Short answer:** Values come in through parameters and go out through return values or reference parameters.
@@ -130,7 +130,7 @@ Last updated: Milestone 2, 28 October 2026.
 
 ### C6. How do the classes interact?
 - **Short answer:** `main()` owns the `DatabaseManager` and the `MainWindow`. The `Sidebar` tells `MainWindow` which page was chosen with a signal. `DatabaseManager` uses the core's `validateTransaction`.
-- **Detailed explanation:** The window does not use the database yet. In Milestone 3 the transactions page will call `DatabaseManager`, never SQL directly.
+- **Detailed explanation:** `main()` passes the `DatabaseManager` to `MainWindow`, which passes it to `TransactionsPage`. The page calls `loadTransactions`, `addTransaction`, `updateTransaction` and `deleteTransaction`; it never contains SQL. `TransactionsPage` opens a `TransactionDialog` for the form. See section K.
 
 ### C7. Did you use inheritance?
 - **Short answer:** Only to extend Qt classes, which is how Qt programs are written. `DatabaseManager` inherits nothing.
@@ -190,7 +190,10 @@ Last updated: Milestone 2, 28 October 2026.
 **Planned — Not Yet Implemented** (Milestone 4). Planned rule: income − expenses, separately for each currency.
 
 ### D10. How are transactions categorised and filtered?
-**Planned — Not Yet Implemented** (Milestone 3). Each transaction already stores a category in the database.
+- **Short answer:** Each transaction has a category. The page loads all transactions into a vector, and `filterTransactions` keeps those for which `matchesFilter` is true.
+- **Detailed explanation:** `matchesFilter` checks type, currency, category, a date range and a search text, returning `false` at the first rule that fails. Empty filter fields mean "any". Dates are compared as YYYY-MM-DD text. The search ignores case for A to Z.
+- **Where in the code:** `src/core/TransactionFilter.cpp`; pseudocode in `docs/DESIGN.md`, section 9.3.
+- **Example:** Type "Expense" plus currency "PKR" plus search "bus" keeps only "Bus fare".
 
 ### D11. How does the budget alert system work?
 **Planned — Not Yet Implemented** (Milestone 4). Agreed rule: an expense counts toward a budget when its category, currency and month match; a warning at 80% and an alert at 100%. Budgets will be added to the database as schema version 2.
@@ -202,8 +205,9 @@ Last updated: Milestone 2, 28 October 2026.
 **Planned — Not Yet Implemented** (Milestones 4 and 5). Already in place: every transaction stores its own currency code, and nothing in the code adds amounts of different currencies.
 
 ### D14. How are invalid amounts and rounding handled?
-- **Short answer:** Invalid amounts are rejected now. Rounding is not needed yet, because nothing is converted or typed as text yet.
-- **Detailed explanation:** `validateTransaction` rejects 0, negative amounts and amounts above `MAX_AMOUNT_MINOR`, which is 999,999,999,999 paisa or 9,999,999,999.99. SQLite's CHECK rule blocks the same values. Rejecting typed amounts with more than two decimals and rounding conversions are **Planned — Not Yet Implemented** (Milestones 3 and 5).
+- **Short answer:** Invalid amounts are rejected, never rounded. Typed text is read exactly with `parseAmount`, without any `double`.
+- **Detailed explanation:** `parseAmount` refuses letters, a minus sign, more than two digits after the point, two points, misplaced commas, zero and anything above 9,999,999,999.99, each with its own message. `validateTransaction` and SQLite's CHECK rule refuse the same values again. Rounding is only needed for currency conversion: **Planned — Not Yet Implemented** (Milestone 5).
+- **Example:** "12.345" gives "Use at most two digits after the decimal point." and the form stays open.
 
 ### D15. Can totals overflow?
 - **Short answer:** One transaction cannot, but a total of many could, so future totals must use checked addition.
@@ -244,7 +248,7 @@ Last updated: Milestone 2, 28 October 2026.
 
 ### E8. How does the application save and read a transaction?
 - **Short answer:** `addTransaction` validates, then runs a prepared INSERT and stores the new id. `findTransactionById` runs a prepared SELECT and copies each column into a `Transaction`.
-- **Detailed explanation:** See `docs/DESIGN.md`, section 7.7. Updating and deleting are **Planned — Not Yet Implemented** (Milestone 3).
+- **Detailed explanation:** See `docs/DESIGN.md`, section 7.7. Since Milestone 3, `loadTransactions` reads every row with a `while (query.next())` loop, `updateTransaction` runs a prepared `UPDATE ... WHERE id = :id`, and `deleteTransaction` runs a prepared `DELETE ... WHERE id = :id`. Both check `numRowsAffected()`: 0 means no row had that id, which is reported as "No transaction with id N was found."
 
 ### E9. How is the schema created, and why is it safe to repeat?
 - **Short answer:** `upgradeSchema()` reads the version number stored in the file and creates tables only if the file is new, inside one database transaction.
@@ -305,7 +309,7 @@ Last updated: Milestone 2, 28 October 2026.
 
 ### F8. How do the GUI and the database interact?
 - **Short answer:** `main()` opens the database before creating the window. The window does not use it yet.
-- **Detailed explanation:** In Milestone 3, the transactions page will call `DatabaseManager` functions. The interface will never contain SQL; Qt SQL is linked privately to the database library.
+- **Detailed explanation:** The Transactions page calls `DatabaseManager` functions and reloads the list after every change. The interface never contains SQL; Qt SQL is linked privately to the database library. The full path from a button click to SQLite is in section K3.
 
 ### F9. How does `Finora.exe` run without Qt installed?
 - **Short answer:** After each build, `windeployqt` copies the Qt DLLs, plugins and MinGW runtime next to `Finora.exe`.
@@ -316,24 +320,27 @@ Last updated: Milestone 2, 28 October 2026.
 ## G. Validation, Errors and Testing
 
 ### G1. How does the program validate input?
-- **Short answer:** Twice: in C++ with `validateTransaction`, and inside SQLite with CHECK and FOREIGN KEY rules.
-- **Detailed explanation:** Validation of text typed into forms is **Planned — Not Yet Implemented** (Milestone 3).
+- **Short answer:** Three times: in the form with `parseAmount` and `validateTransaction`, again in `DatabaseManager`, and finally inside SQLite with CHECK and FOREIGN KEY rules.
+- **Detailed explanation:** The form shows a red message and stays open until the input is valid. The date field only allows real dates between 1900 and 2100, and the currency list only offers PKR, USD and EUR.
 
 ### G2. What happens if a transaction has zero, a negative amount or invalid data?
 - **Short answer:** `addTransaction` returns `false`, nothing is saved, and `lastError()` explains why.
 - **Example:** The test tries 10 invalid transactions and gets messages such as "Amount must be greater than zero." and "Date must be a real date written as YYYY-MM-DD."; the table stays empty.
 
 ### G3. What happens if a transaction is edited or deleted?
-**Planned — Not Yet Implemented** (Milestone 3). Deleting will ask for confirmation first.
+- **Short answer:** Editing opens the same form filled with the old values, and Save runs an UPDATE. Deleting asks "Delete this transaction?" with "No" as the default, and only "Yes" runs the DELETE.
+- **Detailed explanation:** After either change, the page reloads every row from SQLite and shows a green message. If the database refuses, a warning explains why and the table does not change. See K5 and K6.
 
 ### G4. How did you test the program?
 - **Short answer:** Three automated test programs, run with `ctest --preset debug` or `build.bat`.
 
-| Program | Checks | Result on 28 Oct 2026 |
+| Program | Checks | Result on 30 Oct 2026, Windows |
 |---|---|---|
-| `finora_tests` | Greeting, leap years, days per month, 17 dates, currencies, validation | 59 of 59 pass |
-| `finora_ui_tests` | The real window and all 7 buttons | 22 of 22 pass |
-| `finora_db_tests` | Real SQLite files: creation, reopening, saving, reading, punctuation, Urdu text, invalid data, errors, open failures, persistence, SQLite rules | 62 of 62 pass |
+| `finora_tests` | Greeting, leap years, days per month, 17 dates, currencies, validation, 22 typed amounts, formatting, search and filters | 115 of 115 pass |
+| `finora_ui_tests` | The real window and all 7 buttons; the Transactions page on a real database: add, cancel, search, filters, edit, delete with Yes and No, a database error, data after a restart; the form's validation | 76 of 76 pass |
+| `finora_db_tests` | Real SQLite files: creation, reopening, saving, reading, updating, deleting, punctuation, Urdu text, invalid data, errors, open failures, persistence, SQLite rules, ids never reused, single-copy lock | 93 of 93 pass |
+
+The single-copy guard was also tested with the real `Finora.exe`: a second copy showed "Finora is already open", and a copy killed on purpose left a lock file that the next start took over.
 
 ### G5. What edge cases did you consider?
 - **Short answer:** Boundaries and unusual but valid input.
@@ -345,6 +352,9 @@ Last updated: Milestone 2, 28 October 2026.
 - **Description text cut off.** A wrapped, centred label with a maximum width got too little height. **Fix:** the label spans the card's width.
 - **Build failed with "Permission denied".** Finora.exe was still running, and Windows cannot replace a running program. **Fix:** close Finora before building.
 - **Too many SQL drivers.** Adding Qt SQL made `windeployqt` copy six drivers, five needing software that is not installed. **Fix:** `--exclude-plugins` keeps only SQLite.
+- **A member hid a Qt function.** In `TransactionDialog`, a member variable named `result` hid `QDialog::result()`, so the build failed. **Fix:** it is now called `savedTransaction`.
+- **Amount header out of line.** The "Amount" header was left-aligned above right-aligned numbers. **Fix:** the header is right-aligned too.
+- **Two date styles.** The delete question showed "2026-09-02" while the table showed "02 Sep 2026". **Fix:** both use the table's style, and the question also shows the description.
 
 ---
 
@@ -356,8 +366,13 @@ Last updated: Milestone 2, 28 October 2026.
 |---|---|
 | `src/main.cpp` | Starts the program, applies the theme, opens the database, shows the window |
 | `src/core/Greeting.h/.cpp` | Time-of-day greeting |
-| `src/core/Transaction.h/.cpp` | Transaction structure, supported currencies, leap years, dates, validation |
-| `src/database/DatabaseManager.h/.cpp` | All SQL: open, schema, save, read, errors |
+| `src/core/Transaction.h/.cpp` | Transaction structure, supported currencies, suggested categories, leap years, dates, validation |
+| `src/core/Money.h/.cpp` | Reading typed amounts exactly; writing amounts as "1,200.50" |
+| `src/core/TransactionFilter.h/.cpp` | Search and filters |
+| `src/database/DatabaseManager.h/.cpp` | All SQL: open, schema, load, save, update, delete, errors |
+| `src/database/InstanceLock.h/.cpp` | Lets only one copy of Finora run at a time |
+| `src/ui/TransactionsPage.h/.cpp` | The Transactions page |
+| `src/ui/TransactionDialog.h/.cpp` | The Add / Edit Transaction form |
 | `src/ui/MainWindow.h/.cpp` | Window, pages, page switching, window size |
 | `src/ui/Sidebar.h/.cpp` | Logo, navigation buttons; defines the page numbers |
 | `src/ui/PageHeader.h/.cpp` | Reusable title and subtitle |
@@ -424,7 +439,7 @@ int daysInMonth(int year, int month)
 4. SQLite gives the row id 1, which is copied into `transaction.id`.
 5. `findTransactionById(1, loaded)` reads it back, and every field equals the original.
 
-Saving from a screen is **Planned — Not Yet Implemented** (Milestone 3).
+**Saving from the screen:** see section K3.
 
 ### H6. Where does each syllabus concept appear?
 See `docs/CPP_CONCEPTS_MAP.md`.
@@ -452,7 +467,7 @@ See `docs/CPP_CONCEPTS_MAP.md`.
 - **Short answer:** Qt Charts is deprecated since Qt 6.10. Simple charts will be drawn with a few loops. **Planned — Not Yet Implemented** (Milestones 4 and 6).
 
 ### I7. What limitations remain?
-No transaction screen yet; no budgets, goals or exchange rates in the database yet; light theme only; build paths assume `C:\Qt`; nothing stops two copies of Finora running at once, and saving from both at the same time can be very slow or rejected with a "database is locked" error. A single-instance guard is the first task of Milestone 3.
+No totals on the Transactions page yet; filters work in memory, which suits one person's data; search ignores case only for A to Z; the table cannot be re-sorted by clicking a header; no budgets, goals or exchange rates in the database yet; light theme only; build paths assume `C:\Qt`. Only one copy of Finora can run at a time; a second copy says Finora is already open and closes.
 
 ### I8. What would you improve in a future version?
 Answer this after the project is complete.
@@ -461,18 +476,22 @@ Answer this after the project is complete.
 
 ## J. Demonstration and Unexpected Questions
 
-### J1. Suggested live demonstration, Milestone 2
+### J1. Suggested live demonstration, Milestone 3
+The full step-by-step script is in `docs/DEMO_MILESTONE3.md`. In short:
 1. Run `build.bat` and show "100% tests passed, 0 tests failed out of 3".
-2. Run `build\debug\finora_db_tests.exe` and point at the error messages it prints.
-3. Start `Finora.exe`. Press Win + R, type `%LOCALAPPDATA%\Finora`, and show `finora.db`.
-4. Open `src/database/DatabaseManager.cpp` and explain `addTransaction` with H3.
-5. Open `src/core/Transaction.cpp` and explain `isLeapYear` and `daysInMonth` with H2.
+2. Start `Finora.exe`, open Transactions, and add an expense of "1,200.50" PKR; point at "Will be saved as PKR 1,200.50".
+3. Try "12.345" and show the red message.
+4. Add an income in USD, then use search and the filters.
+5. Edit a transaction, then delete one, answering No first and then Yes.
+6. Close Finora, start it again, and show the data is still there.
+7. Start a second copy and show "Finora is already open".
+8. Open `src/core/Money.cpp` and explain `parseAmount` with K4.
 
 ### J2. Most likely difficult follow-up questions
 - **"What happens if the power fails while the tables are being created?"** Creation runs inside one database transaction, so SQLite keeps either all of it or none of it.
 - **"Why store the date as text?"** The ISO form YYYY-MM-DD sorts correctly as text, and SQLite's `date()` function understands it, which the CHECK rule uses.
 - **"Why does `open()` not happen in the constructor?"** Opening can fail. A constructor cannot return `false`, but `open()` can.
-- **"What if two copies of Finora run at once?"** Both can open the file, and nothing stops a second copy yet. SQLite allows only one program to write at a time, so when both save at the same moment one of them must wait. In my tests, saving became very slow and some saves were rejected with a "database is locked" error; a save that cannot get the lock within about 6 seconds is rejected and not stored. The tests found no damaged data, but that does not prove every way of using two copies is safe. The planned fix, the first task of Milestone 3, is a single-instance guard using Qt's `QLockFile`, so only one copy of Finora can run. **Planned — Not Yet Implemented.**
+- **"What if two copies of Finora run at once?"** It cannot happen. Before opening the database, `main()` locks `finora.lock` with Qt's `QLockFile` through my `InstanceLock` class. A second copy finds the lock taken, says Finora is already open, and closes. I added this because SQLite allows only one program to write at a time: in my tests, two programs saving at once became very slow and some saves were rejected with "database is locked". If Finora crashes, the lock file stays, but `QLockFile` sees that the program which wrote it is no longer running and the next start takes it over. I set the stale lock time to 0, because Qt's default would treat a lock older than 30 seconds as abandoned, even while Finora is still open.
 - **"Why `AUTOINCREMENT`?"** So an id is never reused after a deletion.
 - **"Can an apostrophe break your SQL?"** No. Values are bound to placeholders, never glued into the SQL text; the test proves it.
 
@@ -494,10 +513,87 @@ Answer this after the project is complete.
 
 ---
 
+## K. Milestone 3: The Transactions Page
+
+### K1. What can the user do on the Transactions page?
+- **Short answer:** See all transactions, newest first; add, edit and delete them; search by description or category; filter by type, currency, category and period.
+- **Where in the code:** `src/ui/TransactionsPage.cpp`.
+
+### K2. Which classes take part, and what does each do?
+- **Short answer:** `TransactionsPage` is the page, `TransactionDialog` is the form, `DatabaseManager` does the SQL, and plain C++ functions in `src/core` hold the rules.
+- **Detailed explanation:**
+
+| Class or function | Job | OOP idea it shows |
+|---|---|---|
+| `TransactionsPage` | Table, filters, buttons, messages | Inherits `QWidget`; keeps a **reference member** `DatabaseManager &database` |
+| `TransactionDialog` | The Add / Edit form | Inherits `QDialog`; **two constructors** (overloading); private widgets and a private `readForm` |
+| `DatabaseManager` | `loadTransactions`, `addTransaction`, `updateTransaction`, `deleteTransaction` | Encapsulation: the SQL and the connection stay private |
+| `parseAmount`, `formatAmount` | Read and write amounts | Plain functions with parameters and return values |
+| `filterTransactions`, `matchesFilter` | Search and filters | Loops and conditions over a `std::vector` |
+
+### K3. Trace adding a transaction from the click to SQLite and back.
+1. The user clicks **+ Add Transaction**. The `clicked` signal calls the slot `onAddClicked`.
+2. `onAddClicked` creates a `TransactionDialog` and calls `exec()`, which shows the form and waits.
+3. The user fills the form and clicks **Save Transaction**. That calls `onSaveClicked`, which calls `readForm`.
+4. `readForm` turns the amount text into minor units with `parseAmount`, then checks everything with `validateTransaction`. If something is wrong, a red message appears and the form stays open.
+5. If all is valid, `accept()` closes the form and `exec()` returns `QDialog::Accepted`.
+6. The page reads the result with `dialog.transaction()` and calls `saveNewTransaction`, which calls `database.addTransaction`.
+7. `DatabaseManager` validates again and runs a prepared `INSERT`, binding each value to a placeholder. SQLite stores the row and gives it an id.
+8. The page calls `reloadTransactions`. `loadTransactions` reads every row back with `SELECT ... ORDER BY transaction_date DESC, id DESC` into the vector.
+9. `applyFilters` runs `filterTransactions` on the vector, and `showTransactions` fills the table.
+10. A green "Transaction added." banner appears and hides itself after 4 seconds.
+- **Example:** typing "1,200.50" with PKR stores `amount_minor = 120050`, and the table shows "PKR 1,200.50".
+
+### K4. Explain `parseAmount` step by step.
+- **Short answer:** It reads the text one character at a time and builds the whole number and the paisa separately, using only `long long` and `int`.
+- **Detailed explanation:** Spaces at both ends are removed. A digit before the point updates `whole = whole * 10 + digit`; a digit after the point updates `fraction`, and a third digit after the point is an error. A comma is allowed only between two digits of the whole number. Any other character is an error. After the loop, one digit after the point counts as tens of paisa ("0.5" is 50). The result is `whole * 100 + fraction`, which must be above 0 and at most the maximum.
+- **Where in the code:** `src/core/Money.cpp`; pseudocode in `docs/DESIGN.md`, section 9.2.
+- **Example:** "1,20,000" gives `whole = 120000`, `fraction = 0`, result `12000000`, shown as "120,000.00".
+
+### K5. How does editing work?
+- **Short answer:** Select a row and click **Edit**, or double-click the row. The same form opens with the old values, and Save runs an `UPDATE`.
+- **Detailed explanation:** Each row keeps its transaction id hidden in its first cell, set with `setData(Qt::UserRole, id)`. `selectedTransactionId` reads it back, and `findLoadedTransaction` finds that transaction in the vector with a linear search. `TransactionDialog(existing)` fills the form. On Save, `saveEditedTransaction` calls `updateTransaction`, which uses `WHERE id = :id`, so only that row changes.
+
+### K6. How does deleting work, and why ask first?
+- **Short answer:** **Delete** shows "Delete this transaction?" with the date, category, amount and description. "No" is the default button; only "Yes" deletes.
+- **Detailed explanation:** A deleted transaction cannot be recovered, so the program asks. `QMessageBox::question` returns the button the user clicked. On "Yes", `deleteTransaction` runs `DELETE ... WHERE id = :id` and checks `numRowsAffected()`, so deleting a row that no longer exists is reported, not shown as a success.
+
+### K7. How do the Qt widgets talk to the C++ logic?
+- **Short answer:** Through signals and slots. Each `connect` links a widget's signal to one of the page's functions.
+- **Examples from `TransactionsPage.cpp`:** `clicked` of the Add button calls `onAddClicked`; `textChanged` of the search box calls `applyFilters`; `currentIndexChanged` of each filter calls `applyFilters`; `itemSelectionChanged` of the table calls `onSelectionChanged`, which enables Edit and Delete; `cellDoubleClicked` calls `onEditClicked`.
+- **Note:** `cellDoubleClicked` sends a row and a column, but `onEditClicked` takes no parameters. Qt allows a slot to ignore the extra values.
+
+### K8. Why does the page keep a reference to the database instead of its own `DatabaseManager`?
+- **Short answer:** There must be exactly one connection, created in `main()`. The page only uses it, so it holds a reference, written `DatabaseManager &database`.
+- **Detailed explanation:** A reference is another name for an existing object. It must be set in the constructor's initializer list, `database(sharedDatabase)`, and it can never point to anything else afterwards. Because the page does not own the database, it never opens or closes it.
+
+### K9. Why do you reload everything after each change instead of editing the table directly?
+- **Short answer:** So the screen always shows exactly what SQLite stored, including ids and the order.
+- **Detailed explanation:** It costs one `SELECT` per change, which is instant for one person's data, and it removes a whole class of bugs where the table and the database disagree.
+
+### K10. Why are Edit and Delete separate buttons that act on the selected row?
+- **Short answer:** It is simpler and clearer: one Edit and one Delete button, enabled only when a row is selected.
+- **Detailed explanation:** Buttons inside every row would need one widget per row and a way to know which row's button was pressed. With a selection, the page reads the selected row's hidden id.
+
+### K11. How was the page tested automatically, when the form waits for the user?
+- **Short answer:** Just before clicking the button that opens a pop-up, the test starts a 0 ms `QTimer`. The timer fires inside the pop-up's own event loop and plays the user: it fills the form, or clicks Yes or No.
+- **Where in the code:** `fillAddDialogAndSave`, `answerNo` and `answerYes` in `tests/finora_ui_tests.cpp`. The test has a 120-second timeout in CTest, so a stuck pop-up cannot hang it.
+
+### K12. What happens if the database fails while the page is open?
+- **Short answer:** A warning box says what could not be done and why, and the table keeps showing the last good data.
+- **Example:** The interface test closes the database and tries to save. The warning reads "Could not save the transaction. Reason: The database is not open.", and the table still shows 4 rows.
+
+---
+
 ## Quick Revision
 
-- **Finora:** offline Windows finance app in C++17, Qt 6 Widgets and SQLite; Milestone 2 of 7 is done.
-- **Start-up:** theme, then `DatabaseManager::open`, then the window. A failure shows the path and reason, then exits with code 1.
+- **Finora:** offline Windows finance app in C++17, Qt 6 Widgets and SQLite; Milestone 3 of 7 is done.
+- **Start-up:** theme, then the single-copy lock, then `DatabaseManager::open`, then the window. A failure shows the path and reason, then exits with code 1.
+- **Transactions page:** list, add, edit, delete with confirmation, search, and filters for type, currency, category and period.
+- **Typed amounts:** `parseAmount` reads "1,200.50" as 120050 without `double`; more than two decimals are refused.
+- **Filters:** a `std::vector` of transactions and a `for` loop with `matchesFilter`; dates compare as YYYY-MM-DD text.
+- **Edit and delete:** the row's hidden id, then `UPDATE` or `DELETE ... WHERE id = :id`; delete asks first, with No as the default.
+- **OOP in Milestone 3:** constructor overloading in `TransactionDialog`; a reference member in `TransactionsPage`; inheritance from `QWidget` and `QDialog`.
 - **Database file:** `%LOCALAPPDATA%\Finora\finora.db`; back up by copying it while Finora is closed.
 - **Tables:** `currencies` (code primary key) and `transactions` (id primary key AUTOINCREMENT, currency_code foreign key).
 - **Money:** `long long` minor units; 120050 = 1,200.50; per-transaction maximum 999,999,999,999; totals will need checked addition.
@@ -507,5 +603,5 @@ Answer this after the project is complete.
 - **Prepared statements:** placeholders plus `bindValue`, so there is no SQL injection.
 - **RAII:** the destructor closes the database; braces end handle lifetimes before `removeDatabase`; copying is disabled.
 - **Loops:** `for` for fixed counts, `while (query.next())` for database rows.
-- **Tests:** 59 core, 22 interface and 62 database checks, all passing on 28 October 2026.
-- **Not built yet:** the transaction, budget, goal, currency and report screens. Say "planned for Milestone N".
+- **Tests:** 115 core, 76 interface and 93 database checks, all passing on Windows on 30 October 2026.
+- **Not built yet:** the dashboard, budget, goal, currency and report pages. Say "planned for Milestone N".

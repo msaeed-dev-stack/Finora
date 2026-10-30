@@ -9,7 +9,9 @@
 #include <string>
 
 #include "core/Greeting.h"
+#include "core/Money.h"
 #include "core/Transaction.h"
+#include "core/TransactionFilter.h"
 
 // Counts how many checks ran and how many of them failed.
 struct TestCounter {
@@ -221,6 +223,173 @@ void testValidateTransaction(TestCounter &counter)
               "Date must be a real date written as YYYY-MM-DD.");
 }
 
+// One amount test: the typed text and the minor units it should give.
+// -1 means the text must be rejected.
+struct AmountCase {
+    std::string text;
+    long long expected;
+};
+
+void testParseAmount(TestCounter &counter)
+{
+    const int CASE_COUNT = 22;
+    const AmountCase cases[CASE_COUNT] = {
+        {"1200", 120000},                      // whole number
+        {"1,200.50", 120050},                  // thousands comma and paisa
+        {"1,20,000", 12000000},                // Pakistani lakh grouping
+        {"0.5", 50},                           // one decimal digit means 50 paisa
+        {"0.05", 5},                           // smallest amount
+        {".75", 75},                           // no digit before the point
+        {"12.", 1200},                         // point with no digits after it
+        {"  250.00 ", 25000},                  // spaces around the text
+        {"9,999,999,999.99", 999999999999LL},  // the maximum
+        {"", -1},                              // empty
+        {"   ", -1},                           // only spaces
+        {"0", -1},                             // zero
+        {"0.00", -1},                          // zero with decimals
+        {"-50", -1},                           // negative
+        {"12.345", -1},                        // three decimal digits
+        {"1.2.3", -1},                         // two decimal points
+        {"12a", -1},                           // a letter
+        {"1,,200", -1},                        // two commas together
+        {",100", -1},                          // comma at the start
+        {"100,", -1},                          // comma at the end
+        {"10,000,000,000.00", -1},             // above the maximum
+        {"1.5,0", -1}                          // comma after the decimal point
+    };
+
+    for (int i = 0; i < CASE_COUNT; i++) {
+        long long amount = -1;   // stays -1 when the text is rejected
+        std::string problem = parseAmount(cases[i].text, amount);
+
+        if (cases[i].expected == -1) {
+            checkBool(counter, "parseAmount rejects \"" + cases[i].text + "\"",
+                      !problem.empty() && amount == -1, true);
+        } else {
+            checkBool(counter, "parseAmount(\"" + cases[i].text + "\") gives "
+                      + std::to_string(cases[i].expected),
+                      problem.empty() && amount == cases[i].expected, true);
+        }
+    }
+
+    long long amount = 0;
+    checkText(counter, "message for three decimal digits", parseAmount("12.345", amount),
+              "Use at most two digits after the decimal point.");
+    checkText(counter, "message for a letter", parseAmount("12a", amount),
+              "An amount may contain only digits, commas and one decimal point.");
+    checkText(counter, "message for zero", parseAmount("0.00", amount),
+              "Amount must be greater than zero.");
+    checkText(counter, "message for an empty amount", parseAmount("", amount),
+              "Please enter an amount.");
+}
+
+void testFormatAmount(TestCounter &counter)
+{
+    checkText(counter, "formatAmount(120050)", formatAmount(120050), "1,200.50");
+    checkText(counter, "formatAmount(0)", formatAmount(0), "0.00");
+    checkText(counter, "formatAmount(5)", formatAmount(5), "0.05");
+    checkText(counter, "formatAmount(100)", formatAmount(100), "1.00");
+    checkText(counter, "formatAmount(99999)", formatAmount(99999), "999.99");
+    checkText(counter, "formatAmount(100000)", formatAmount(100000), "1,000.00");
+    checkText(counter, "formatAmount(12000000)", formatAmount(12000000), "120,000.00");
+    checkText(counter, "formatAmount(maximum)", formatAmount(MAX_AMOUNT_MINOR), "9,999,999,999.99");
+    checkText(counter, "formatAmount(-120050)", formatAmount(-120050), "-1,200.50");
+    checkText(counter, "formatMoney(\"USD\", 500)", formatMoney("USD", 500), "USD 5.00");
+
+    checkText(counter, "trimSpaces removes outer spaces", trimSpaces("  a b  "), "a b");
+    checkText(counter, "trimSpaces of empty text", trimSpaces(""), "");
+    checkText(counter, "trimSpaces of spaces only", trimSpaces("   "), "");
+}
+
+// Builds one transaction for the filter tests.
+Transaction makeTransaction(const std::string &type, long long amount, const std::string &currency,
+                            const std::string &category, const std::string &description,
+                            const std::string &date)
+{
+    Transaction transaction;
+    transaction.type = type;
+    transaction.amountMinor = amount;
+    transaction.currencyCode = currency;
+    transaction.category = category;
+    transaction.description = description;
+    transaction.date = date;
+    return transaction;
+}
+
+void testFilters(TestCounter &counter)
+{
+    std::vector<Transaction> list;
+    list.push_back(makeTransaction(TYPE_EXPENSE, 120050, "PKR", "Food", "Groceries from Ali's shop", "2026-10-28"));
+    list.push_back(makeTransaction(TYPE_INCOME, 50000, "USD", "Freelance", "Website for a client", "2026-10-15"));
+    list.push_back(makeTransaction(TYPE_EXPENSE, 8000, "PKR", "Transport", "Bus fare", "2026-09-30"));
+    list.push_back(makeTransaction(TYPE_INCOME, 12000000, "PKR", "Salary", "October salary", "2026-10-01"));
+    list.push_back(makeTransaction(TYPE_EXPENSE, 450, "EUR", "Food", "Coffee", "2026-08-20"));
+
+    TransactionFilter filter;   // every field empty: no filtering
+    checkInt(counter, "an empty filter keeps all 5", static_cast<int>(filterTransactions(list, filter).size()), 5);
+
+    filter = TransactionFilter();
+    filter.type = TYPE_EXPENSE;
+    checkInt(counter, "type expense keeps 3", static_cast<int>(filterTransactions(list, filter).size()), 3);
+
+    filter = TransactionFilter();
+    filter.currencyCode = "PKR";
+    checkInt(counter, "currency PKR keeps 3", static_cast<int>(filterTransactions(list, filter).size()), 3);
+
+    filter = TransactionFilter();
+    filter.category = "Food";
+    checkInt(counter, "category Food keeps 2", static_cast<int>(filterTransactions(list, filter).size()), 2);
+
+    filter = TransactionFilter();
+    filter.searchText = "GROC";
+    checkInt(counter, "search GROC ignores case and keeps 1", static_cast<int>(filterTransactions(list, filter).size()), 1);
+
+    filter = TransactionFilter();
+    filter.searchText = "food";
+    checkInt(counter, "search food also matches the category: 2", static_cast<int>(filterTransactions(list, filter).size()), 2);
+
+    filter = TransactionFilter();
+    filter.fromDate = "2026-10-01";
+    checkInt(counter, "from 2026-10-01 includes that day: 3", static_cast<int>(filterTransactions(list, filter).size()), 3);
+
+    filter = TransactionFilter();
+    filter.toDate = "2026-09-30";
+    checkInt(counter, "up to 2026-09-30 includes that day: 2", static_cast<int>(filterTransactions(list, filter).size()), 2);
+
+    filter = TransactionFilter();
+    filter.fromDate = "2026-10-01";
+    filter.toDate = "2026-10-31";
+    filter.type = TYPE_EXPENSE;
+    checkInt(counter, "October expenses only: 1", static_cast<int>(filterTransactions(list, filter).size()), 1);
+
+    filter = TransactionFilter();
+    filter.type = TYPE_EXPENSE;
+    filter.currencyCode = "PKR";
+    filter.searchText = "bus";
+    checkInt(counter, "expense + PKR + search bus: 1", static_cast<int>(filterTransactions(list, filter).size()), 1);
+
+    filter = TransactionFilter();
+    filter.searchText = "xyz";
+    checkInt(counter, "a search with no match keeps 0", static_cast<int>(filterTransactions(list, filter).size()), 0);
+
+    filter = TransactionFilter();
+    filter.type = TYPE_INCOME;
+    std::vector<Transaction> income = filterTransactions(list, filter);
+    checkText(counter, "filtering keeps the original order", income[0].description, "Website for a client");
+
+    std::vector<std::string> categories = distinctCategories(list);
+    checkInt(counter, "4 different categories", static_cast<int>(categories.size()), 4);
+    checkText(counter, "categories are sorted A to Z",
+              categories[0] + "," + categories[1] + "," + categories[2] + "," + categories[3],
+              "Food,Freelance,Salary,Transport");
+
+    checkText(counter, "toLowerText", toLowerText("ABC xyz 123"), "abc xyz 123");
+    checkBool(counter, "containsIgnoringCase finds SHOP in shop",
+              containsIgnoringCase("Ali's shop", "SHOP"), true);
+    checkBool(counter, "containsIgnoringCase does not find bank",
+              containsIgnoringCase("Ali's shop", "bank"), false);
+}
+
 int main()
 {
     TestCounter counter;
@@ -233,6 +402,9 @@ int main()
     testIsValidIsoDate(counter);
     testCurrenciesAndBlankText(counter);
     testValidateTransaction(counter);
+    testParseAmount(counter);
+    testFormatAmount(counter);
+    testFilters(counter);
 
     std::cout << "-----------------\n";
     std::cout << counter.checksRun << " checks, " << counter.checksFailed << " failed\n";

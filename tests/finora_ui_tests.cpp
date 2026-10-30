@@ -1,25 +1,42 @@
 // =====================================================================
 //  finora_ui_tests.cpp
-//  Automated checks for Finora's main window.
+//  Automated checks for Finora's main window and Transactions page.
 //
-//  The test builds the real MainWindow, clicks every sidebar button from
-//  code, and checks that the matching page appears. CTest runs it with
-//  QT_QPA_PLATFORM=offscreen, so the window is drawn in memory only.
+//  The tests build the real MainWindow on a real SQLite database inside
+//  a temporary folder, click buttons from code, and check what appears.
+//  CTest runs them with QT_QPA_PLATFORM=offscreen, so windows are drawn
+//  in memory only and nothing pops up on the screen.
 //
 //  Optional:  finora_ui_tests --screenshots <folder>
-//  saves a picture of every page into <folder>.
+//  saves a picture of every page and of the pop-up windows into <folder>.
 // =====================================================================
 #include <QAbstractButton>
 #include <QApplication>
 #include <QButtonGroup>
+#include <QComboBox>
+#include <QDate>
+#include <QDateEdit>
 #include <QDir>
+#include <QLabel>
+#include <QLineEdit>
+#include <QMessageBox>
+#include <QPushButton>
+#include <QRadioButton>
 #include <QStackedWidget>
+#include <QTableWidget>
+#include <QTemporaryDir>
+#include <QTimer>
 
 #include <iostream>
 #include <string>
+#include <vector>
 
+#include "core/Transaction.h"
+#include "database/DatabaseManager.h"
 #include "ui/MainWindow.h"
 #include "ui/Theme.h"
+#include "ui/TransactionDialog.h"
+#include "ui/TransactionsPage.h"
 
 // Counts how many checks ran and how many of them failed.
 struct TestCounter {
@@ -53,31 +70,140 @@ int countCheckedButtons(QButtonGroup *group)
     return checkedCount;
 }
 
-int main(int argc, char *argv[])
+// Finds a push button by its text, for example "Edit".
+QPushButton *findButton(QWidget *parent, const QString &text)
 {
-    QApplication app(argc, argv);
-    app.setApplicationName("Finora");
-    app.setApplicationVersion(FINORA_VERSION);
+    QList<QPushButton *> buttons = parent->findChildren<QPushButton *>();
+    for (int i = 0; i < buttons.size(); i++) {
+        if (buttons[i]->text() == text) {
+            return buttons[i];
+        }
+    }
+    return nullptr;
+}
 
-    TestCounter counter;
-    std::cout << "Finora interface tests\n";
-    std::cout << "----------------------\n";
+// Returns the table row whose Description column shows `description`, or -1.
+int findRow(QTableWidget *table, const QString &description)
+{
+    for (int row = 0; row < table->rowCount(); row++) {
+        if (table->item(row, 3)->text() == description) {
+            return row;
+        }
+    }
+    return -1;
+}
 
-    check(counter, "light theme and style sheet load", applyLightTheme(app));
+// ---- Playing the user's part in pop-up windows -----------------------
+// A window opened with exec() waits for the user. Just before a test
+// clicks the button that opens it, the test starts a 0 ms timer. The
+// timer fires inside the pop-up's own event loop and runs one of the
+// functions below, which fills in the form or clicks an answer.
+//
+// These two variables exist only in this test program: they pass the
+// answer's text and the screenshot folder to the timer functions.
+QString lastMessageText;
+QString popupScreenshotFolder;
 
-    MainWindow window;
-    window.resize(1280, 800);
-    window.show();
+void saveScreenshot(QWidget *widget, const QString &name)
+{
+    if (!popupScreenshotFolder.isEmpty()) {
+        widget->grab().save(popupScreenshotFolder + "/" + name + ".png");
+    }
+}
 
-    // Find the page area and the sidebar buttons inside the real window.
+void answerMessageBox(QMessageBox::StandardButton answer, const QString &screenshotName)
+{
+    QMessageBox *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+    if (box == nullptr) {
+        return;
+    }
+    lastMessageText = box->text();
+    saveScreenshot(box, screenshotName);
+    box->button(answer)->click();
+}
+
+void answerNo()
+{
+    answerMessageBox(QMessageBox::No, "delete_confirmation");
+}
+
+void answerYes()
+{
+    answerMessageBox(QMessageBox::Yes, "delete_confirmation_yes");
+}
+
+void answerOk()
+{
+    answerMessageBox(QMessageBox::Ok, "database_error");
+}
+
+void fillAddDialogAndSave()
+{
+    TransactionDialog *dialog = qobject_cast<TransactionDialog *>(QApplication::activeModalWidget());
+    if (dialog == nullptr) {
+        return;
+    }
+    dialog->findChild<QRadioButton *>("expenseButton")->setChecked(true);
+    dialog->findChild<QComboBox *>("categoryBox")->setCurrentText("Food");
+    dialog->findChild<QLineEdit *>("amountEdit")->setText("1,200.50");
+    QComboBox *currency = dialog->findChild<QComboBox *>("currencyBox");
+    currency->setCurrentIndex(currency->findData("PKR"));
+    dialog->findChild<QDateEdit *>("dateEdit")->setDate(QDate::currentDate());
+    dialog->findChild<QLineEdit *>("descriptionEdit")->setText("Groceries from Ali's shop");
+    saveScreenshot(dialog, "add_transaction_dialog");
+    dialog->findChild<QPushButton *>("primaryButton")->click();   // Save Transaction
+}
+
+void cancelDialog()
+{
+    TransactionDialog *dialog = qobject_cast<TransactionDialog *>(QApplication::activeModalWidget());
+    if (dialog == nullptr) {
+        return;
+    }
+    dialog->findChild<QLineEdit *>("amountEdit")->setText("999");
+    findButton(dialog, "Cancel")->click();
+}
+
+void changeAmountAndSave()
+{
+    TransactionDialog *dialog = qobject_cast<TransactionDialog *>(QApplication::activeModalWidget());
+    if (dialog == nullptr) {
+        return;
+    }
+    dialog->findChild<QLineEdit *>("amountEdit")->setText("1,500");
+    dialog->findChild<QLineEdit *>("descriptionEdit")->setText("Groceries (edited)");
+    saveScreenshot(dialog, "edit_transaction_dialog");
+    dialog->findChild<QPushButton *>("primaryButton")->click();
+}
+
+// Builds one transaction for the tests.
+Transaction makeTransaction(const std::string &type, long long amount, const std::string &currency,
+                            const std::string &category, const std::string &description,
+                            const QDate &date)
+{
+    Transaction transaction;
+    transaction.type = type;
+    transaction.amountMinor = amount;
+    transaction.currencyCode = currency;
+    transaction.category = category;
+    transaction.description = description;
+    transaction.date = date.toString("yyyy-MM-dd").toStdString();
+    return transaction;
+}
+
+// ---- Tests -----------------------------------------------------------
+
+// Milestone 1: the window, the sidebar and switching pages.
+void testNavigation(TestCounter &counter, QApplication &app, MainWindow &window,
+                    const QString &screenshotFolder)
+{
     QStackedWidget *pageStack = window.findChild<QStackedWidget *>("pageStack");
     QButtonGroup *navGroup = window.findChild<QButtonGroup *>();
 
     check(counter, "page area exists", pageStack != nullptr);
     check(counter, "sidebar button group exists", navGroup != nullptr);
     if (pageStack == nullptr || navGroup == nullptr) {
-        std::cout << "Cannot continue without the page area and the buttons.\n";
-        return 1;
+        return;
     }
 
     check(counter, "window title is Finora", window.windowTitle() == "Finora");
@@ -86,14 +212,6 @@ int main(int argc, char *argv[])
     check(counter, "starts on the dashboard", pageStack->currentIndex() == PAGE_DASHBOARD);
     check(counter, "dashboard button starts selected", navGroup->button(PAGE_DASHBOARD)->isChecked());
 
-    // Optional screenshots for checking the design by eye.
-    QString screenshotFolder;
-    if (argc == 3 && std::string(argv[1]) == "--screenshots") {
-        screenshotFolder = QString::fromLocal8Bit(argv[2]);
-        QDir().mkpath(screenshotFolder);
-    }
-
-    // Click every sidebar button and check that the right page appears.
     for (int pageNumber = 0; pageNumber < PAGE_COUNT; pageNumber++) {
         QAbstractButton *button = navGroup->button(pageNumber);
         button->setFocus();   // a real mouse click also moves the keyboard focus
@@ -107,10 +225,307 @@ int main(int argc, char *argv[])
               button->isChecked() && countCheckedButtons(navGroup) == 1);
 
         if (!screenshotFolder.isEmpty()) {
-            QString fileName = screenshotFolder + "/page_" + QString::number(pageNumber) + ".png";
-            window.grab().save(fileName);
+            window.grab().save(screenshotFolder + "/page_" + QString::number(pageNumber) + ".png");
         }
     }
+}
+
+// Milestone 3: the form on its own, without opening it with exec().
+void testDialogValidation(TestCounter &counter)
+{
+    TransactionDialog dialog;
+    QLineEdit *amount = dialog.findChild<QLineEdit *>("amountEdit");
+    QComboBox *category = dialog.findChild<QComboBox *>("categoryBox");
+    QPushButton *save = dialog.findChild<QPushButton *>("primaryButton");
+    QLabel *error = dialog.findChild<QLabel *>("formError");
+    QLabel *preview = dialog.findChild<QLabel *>("amountPreview");
+
+    check(counter, "a new form is titled Add Transaction", dialog.windowTitle() == "Add Transaction");
+    check(counter, "a new form starts as an expense",
+          dialog.findChild<QRadioButton *>("expenseButton")->isChecked());
+
+    amount->setText("12.345");
+    save->click();
+    check(counter, "Save refuses an amount with three decimals",
+          dialog.result() != QDialog::Accepted && !error->isHidden()
+              && error->text() == "Use at most two digits after the decimal point.");
+
+    amount->setText("abc");
+    save->click();
+    check(counter, "Save refuses letters in the amount",
+          dialog.result() != QDialog::Accepted
+              && error->text() == "An amount may contain only digits, commas and one decimal point.");
+
+    amount->setText("");
+    save->click();
+    check(counter, "Save refuses an empty amount", error->text() == "Please enter an amount.");
+
+    amount->setText("250");
+    category->setCurrentText("   ");
+    save->click();
+    check(counter, "Save refuses a blank category",
+          dialog.result() != QDialog::Accepted && error->text() == "Category must not be empty.");
+
+    // A valid income in USD, typed with Pakistani lakh grouping.
+    dialog.findChild<QRadioButton *>("incomeButton")->setChecked(true);
+    category->setCurrentText("Salary");
+    QComboBox *currency = dialog.findChild<QComboBox *>("currencyBox");
+    currency->setCurrentIndex(currency->findData("USD"));
+    amount->setText("1,20,000");
+    check(counter, "the preview shows how the amount will be saved",
+          preview->text() == "Will be saved as USD 120,000.00");
+    save->click();
+
+    Transaction saved = dialog.transaction();
+    check(counter, "a valid form is accepted", dialog.result() == QDialog::Accepted);
+    check(counter, "the form gives the right transaction",
+          saved.id == 0 && saved.type == TYPE_INCOME && saved.amountMinor == 12000000
+              && saved.currencyCode == "USD" && saved.category == "Salary"
+              && saved.date == QDate::currentDate().toString("yyyy-MM-dd").toStdString());
+
+    // The edit form starts with the existing values.
+    Transaction existing = makeTransaction(TYPE_INCOME, 123456, "EUR", "Freelance", "Logo design",
+                                           QDate(2026, 10, 15));
+    existing.id = 7;
+    TransactionDialog editDialog(existing);
+    check(counter, "an edit form is titled Edit Transaction", editDialog.windowTitle() == "Edit Transaction");
+    check(counter, "the edit form shows the existing values",
+          editDialog.findChild<QLineEdit *>("amountEdit")->text() == "1,234.56"
+              && editDialog.findChild<QRadioButton *>("incomeButton")->isChecked()
+              && editDialog.findChild<QComboBox *>("currencyBox")->currentData().toString() == "EUR"
+              && editDialog.findChild<QComboBox *>("categoryBox")->currentText() == "Freelance"
+              && editDialog.findChild<QDateEdit *>("dateEdit")->date() == QDate(2026, 10, 15)
+              && editDialog.findChild<QLineEdit *>("descriptionEdit")->text() == "Logo design");
+    editDialog.findChild<QPushButton *>("primaryButton")->click();
+    Transaction unchanged = editDialog.transaction();
+    check(counter, "saving the edit form keeps the id and the values",
+          editDialog.result() == QDialog::Accepted && unchanged.id == 7 && unchanged.amountMinor == 123456
+              && unchanged.date == "2026-10-15");
+}
+
+// Milestone 3: the Transactions page, used the way a person would use it.
+void testTransactionsPage(TestCounter &counter, QApplication &app, MainWindow &window,
+                          DatabaseManager &database, const QString &databasePath,
+                          const QString &screenshotFolder)
+{
+    TransactionsPage *page = window.findChild<TransactionsPage *>("transactionsPage");
+    check(counter, "the Transactions page is a real page, not a placeholder", page != nullptr);
+    if (page == nullptr) {
+        return;
+    }
+
+    QButtonGroup *navGroup = window.findChild<QButtonGroup *>();
+    navGroup->button(PAGE_TRANSACTIONS)->click();
+    app.processEvents();
+
+    QTableWidget *table = page->findChild<QTableWidget *>("transactionTable");
+    QLabel *emptyLabel = page->findChild<QLabel *>("emptyText");
+    QLabel *countLabel = page->findChild<QLabel *>("mutedText");
+    QLabel *banner = page->findChild<QLabel *>("successBanner");
+    QLineEdit *search = page->findChild<QLineEdit *>("searchEdit");
+    QComboBox *typeFilter = page->findChild<QComboBox *>("typeFilter");
+    QComboBox *currencyFilter = page->findChild<QComboBox *>("currencyFilter");
+    QComboBox *categoryFilter = page->findChild<QComboBox *>("categoryFilter");
+    QComboBox *periodFilter = page->findChild<QComboBox *>("periodFilter");
+    QPushButton *addButton = findButton(page, "+  Add Transaction");
+    QPushButton *editButton = findButton(page, "Edit");
+    QPushButton *deleteButton = findButton(page, "Delete");
+    QPushButton *clearButton = findButton(page, "Clear filters");
+
+    // 1. An empty database.
+    check(counter, "an empty database shows the empty message",
+          table->rowCount() == 0 && !emptyLabel->isHidden() && emptyLabel->text().startsWith("No transactions yet"));
+    check(counter, "the count says 0 of 0", countLabel->text() == "Showing 0 of 0 transactions");
+    check(counter, "Edit and Delete are disabled with no selection",
+          !editButton->isEnabled() && !deleteButton->isEnabled());
+
+    // 2. Adding through the real form.
+    QTimer::singleShot(0, fillAddDialogAndSave);
+    addButton->click();
+    check(counter, "adding through the form shows one row", table->rowCount() == 1);
+    check(counter, "the row shows the saved values",
+          table->rowCount() == 1 && table->item(0, 1)->text() == "Expense" && table->item(0, 2)->text() == "Food"
+              && table->item(0, 3)->text() == "Groceries from Ali's shop"
+              && table->item(0, 4)->text() == "PKR 1,200.50");
+    check(counter, "a success message is shown", !banner->isHidden() && banner->text() == "Transaction added.");
+    std::vector<Transaction> stored;
+    database.loadTransactions(stored);
+    check(counter, "the new transaction is really in SQLite, as 120050 paisa",
+          stored.size() == 1 && stored[0].amountMinor == 120050);
+
+    // 3. Cancelling the form saves nothing.
+    QTimer::singleShot(0, cancelDialog);
+    addButton->click();
+    check(counter, "Cancel saves nothing", table->rowCount() == 1);
+
+    // 4. More transactions, with dates relative to today for the period filter.
+    QDate today = QDate::currentDate();
+    QDate firstOfThisMonth(today.year(), today.month(), 1);
+    QDate firstOfLastMonth = firstOfThisMonth.addMonths(-1);
+    Transaction freelance = makeTransaction(TYPE_INCOME, 500000, "USD", "Freelance", "Website for a client", firstOfLastMonth);
+    Transaction bus = makeTransaction(TYPE_EXPENSE, 8000, "PKR", "Transport", "Bus fare", firstOfLastMonth.addDays(1));
+    Transaction salary = makeTransaction(TYPE_INCOME, 12000000, "PKR", "Salary", "Monthly salary", firstOfThisMonth);
+    Transaction coffee = makeTransaction(TYPE_EXPENSE, 450, "EUR", "Food", "Coffee", QDate(today.year() - 1, 6, 15));
+    bool allSaved = page->saveNewTransaction(freelance) && page->saveNewTransaction(bus)
+                    && page->saveNewTransaction(salary) && page->saveNewTransaction(coffee);
+    check(counter, "four more transactions are saved", allSaved && table->rowCount() == 5);
+    check(counter, "the count says 5 of 5", countLabel->text() == "Showing 5 of 5 transactions");
+    check(counter, "the oldest transaction is the last row",
+          table->rowCount() == 5 && table->item(4, 3)->text() == "Coffee");
+    check(counter, "income amounts are green and expense amounts red",
+          table->item(findRow(table, "Monthly salary"), 4)->foreground().color() == QColor("#16A34A")
+              && table->item(findRow(table, "Coffee"), 4)->foreground().color() == QColor("#DC2626"));
+    if (!screenshotFolder.isEmpty()) {
+        window.grab().save(screenshotFolder + "/transactions_all.png");
+    }
+
+    // 5. Search and filters.
+    search->setText("GROC");
+    check(counter, "search GROC finds Ali's groceries, ignoring case",
+          table->rowCount() == 1 && table->item(0, 3)->text() == "Groceries from Ali's shop");
+    search->setText("food");
+    check(counter, "search food also matches the Food category: 2 rows", table->rowCount() == 2);
+    if (!screenshotFolder.isEmpty()) {
+        window.grab().save(screenshotFolder + "/transactions_search.png");
+    }
+    search->clear();
+
+    typeFilter->setCurrentIndex(typeFilter->findData(QString::fromStdString(TYPE_INCOME)));
+    check(counter, "type Income shows 2 rows", table->rowCount() == 2);
+    typeFilter->setCurrentIndex(0);
+
+    currencyFilter->setCurrentIndex(currencyFilter->findData("USD"));
+    check(counter, "currency USD shows 1 row", table->rowCount() == 1);
+    currencyFilter->setCurrentIndex(0);
+
+    check(counter, "the category filter lists the 4 categories in use", categoryFilter->count() == 5);
+    categoryFilter->setCurrentIndex(categoryFilter->findData("Transport"));
+    check(counter, "category Transport shows 1 row", table->rowCount() == 1);
+    categoryFilter->setCurrentIndex(0);
+
+    periodFilter->setCurrentIndex(1);   // This month
+    check(counter, "This month shows the 2 transactions of this month", table->rowCount() == 2);
+    periodFilter->setCurrentIndex(2);   // Last month
+    check(counter, "Last month shows 2 rows", table->rowCount() == 2);
+    periodFilter->setCurrentIndex(3);   // This year
+    int expectedThisYear = 2;
+    if (firstOfLastMonth.year() == today.year()) {
+        expectedThisYear = 4;   // in January, last month belongs to last year
+    }
+    check(counter, "This year leaves out last year's coffee", table->rowCount() == expectedThisYear);
+
+    periodFilter->setCurrentIndex(1);
+    typeFilter->setCurrentIndex(typeFilter->findData(QString::fromStdString(TYPE_EXPENSE)));
+    check(counter, "This month + Expense: 1 row", table->rowCount() == 1);
+
+    search->setText("xyz");
+    check(counter, "no match shows the 'no match' message",
+          table->rowCount() == 0 && !emptyLabel->isHidden()
+              && emptyLabel->text() == "No transactions match these filters.");
+    check(counter, "the count says 0 of 5", countLabel->text() == "Showing 0 of 5 transactions");
+
+    clearButton->click();
+    check(counter, "Clear filters shows all 5 rows again",
+          table->rowCount() == 5 && search->text().isEmpty() && typeFilter->currentIndex() == 0
+              && periodFilter->currentIndex() == 0);
+
+    // 6. Editing through the real form.
+    table->selectRow(findRow(table, "Groceries from Ali's shop"));
+    check(counter, "selecting a row enables Edit and Delete", editButton->isEnabled() && deleteButton->isEnabled());
+    QTimer::singleShot(0, changeAmountAndSave);
+    editButton->click();
+    int editedRow = findRow(table, "Groceries (edited)");
+    check(counter, "the edited row shows the new values",
+          editedRow >= 0 && table->item(editedRow, 4)->text() == "PKR 1,500.00");
+    check(counter, "the update message is shown", banner->text() == "Transaction updated.");
+    Transaction afterEdit;
+    database.findTransactionById(stored[0].id, afterEdit);
+    check(counter, "the edit is really in SQLite", afterEdit.amountMinor == 150000);
+
+    // 7. Deleting asks first.
+    table->selectRow(findRow(table, "Bus fare"));
+    QTimer::singleShot(0, answerNo);
+    deleteButton->click();
+    check(counter, "Delete asks for confirmation", lastMessageText.startsWith("Delete this transaction?"));
+    check(counter, "answering No keeps the transaction", table->rowCount() == 5 && findRow(table, "Bus fare") >= 0);
+
+    table->selectRow(findRow(table, "Bus fare"));
+    QTimer::singleShot(0, answerYes);
+    deleteButton->click();
+    check(counter, "answering Yes deletes it", table->rowCount() == 4 && findRow(table, "Bus fare") == -1);
+    check(counter, "the delete message is shown", banner->text() == "Transaction deleted.");
+    database.loadTransactions(stored);
+    check(counter, "SQLite now holds 4 transactions", stored.size() == 4);
+    check(counter, "Transport left the category filter", categoryFilter->findData("Transport") == -1);
+    if (!screenshotFolder.isEmpty()) {
+        window.grab().save(screenshotFolder + "/transactions_after_delete.png");
+    }
+
+    // 8. A database error is shown, and nothing changes.
+    database.close();
+    Transaction refused = makeTransaction(TYPE_EXPENSE, 100, "PKR", "Food", "While closed", today);
+    QTimer::singleShot(0, answerOk);
+    bool savedWhileClosed = page->saveNewTransaction(refused);
+    check(counter, "saving while the database is closed fails with a warning",
+          !savedWhileClosed && lastMessageText.contains("The database is not open."));
+    check(counter, "the table is unchanged after the error", table->rowCount() == 4);
+    bool reopened = database.open(databasePath);
+    page->reloadTransactions();
+    check(counter, "after reopening, the page loads the 4 rows again", reopened && table->rowCount() == 4);
+}
+
+// Milestone 3: data is still there after "restarting" Finora.
+void testDataAfterRestart(TestCounter &counter, const QString &databasePath)
+{
+    DatabaseManager database("ui_tests_restart");
+    bool opened = database.open(databasePath);
+    MainWindow window(database);
+    TransactionsPage *page = window.findChild<TransactionsPage *>("transactionsPage");
+    QTableWidget *table = page->findChild<QTableWidget *>("transactionTable");
+
+    check(counter, "after a restart the page shows the 4 saved transactions", opened && table->rowCount() == 4);
+    int editedRow = findRow(table, "Groceries (edited)");
+    check(counter, "after a restart the edited amount is still PKR 1,500.00",
+          editedRow >= 0 && table->item(editedRow, 4)->text() == "PKR 1,500.00");
+}
+
+int main(int argc, char *argv[])
+{
+    QApplication app(argc, argv);
+    app.setApplicationName("Finora");
+    app.setApplicationVersion(FINORA_VERSION);
+
+    TestCounter counter;
+    std::cout << "Finora interface tests\n";
+    std::cout << "----------------------\n";
+
+    QString screenshotFolder;
+    if (argc == 3 && std::string(argv[1]) == "--screenshots") {
+        screenshotFolder = QString::fromLocal8Bit(argv[2]);
+        QDir().mkpath(screenshotFolder);
+        popupScreenshotFolder = screenshotFolder;
+    }
+
+    check(counter, "light theme and style sheet load", applyLightTheme(app));
+
+    // A real database in a temporary folder that is deleted at the end.
+    QTemporaryDir temporaryFolder;
+    QString databasePath = temporaryFolder.path() + "/ui_test.db";
+
+    {
+        DatabaseManager database("ui_tests");
+        check(counter, "the test database opens", database.open(databasePath));
+
+        MainWindow window(database);
+        window.resize(1280, 800);
+        window.show();
+
+        testNavigation(counter, app, window, screenshotFolder);
+        testTransactionsPage(counter, app, window, database, databasePath, screenshotFolder);
+    }   // the window, then the database, are destroyed here: like closing Finora
+
+    testDialogValidation(counter);
+    testDataAfterRestart(counter, databasePath);
 
     std::cout << "----------------------\n";
     std::cout << counter.checksRun << " checks, " << counter.checksFailed << " failed\n";

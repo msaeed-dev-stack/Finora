@@ -9,10 +9,12 @@
 #include <QTime>
 
 #include "PlaceholderPage.h"
+#include "TransactionsPage.h"
 #include "core/Greeting.h"
 
 // ---- Text for the pages that are not built yet ----------------------
-// One structure per page, in page-number order (see Sidebar.h).
+// One structure per page, in page-number order (see Sidebar.h). The
+// Transactions entry is no longer shown: Milestone 3 built that page.
 struct PageInfo {
     const char *title;            // large heading at the top of the page
     const char *subtitle;         // grey line under the heading
@@ -38,7 +40,7 @@ const PageInfo PAGE_INFO[PAGE_COUNT] = {
      "Your default currency and other preferences."}
 };
 
-MainWindow::MainWindow(QWidget *parent)
+MainWindow::MainWindow(DatabaseManager &database, QWidget *parent)
     : QMainWindow(parent)
 {
     setWindowTitle("Finora");
@@ -46,7 +48,7 @@ MainWindow::MainWindow(QWidget *parent)
     setMinimumSize(960, 600);
 
     createLayout();
-    createPages();
+    createPages(database);
     setStartingSize();
 
     // Signal and slot: when the sidebar sends pageSelected(n),
@@ -86,9 +88,15 @@ void MainWindow::createLayout()
 }
 
 // Creates one page for every sidebar button, using a for loop.
-void MainWindow::createPages()
+// The Transactions page is real; the other pages are still placeholders.
+void MainWindow::createPages(DatabaseManager &database)
 {
     for (int pageNumber = 0; pageNumber < PAGE_COUNT; pageNumber++) {
+        if (pageNumber == PAGE_TRANSACTIONS) {
+            pageStack->addWidget(new TransactionsPage(database, pageStack));
+            continue;   // go on with the next page number
+        }
+
         QString title = PAGE_INFO[pageNumber].title;
 
         // The dashboard greets the user according to the time of day.

@@ -10,6 +10,8 @@
 #include <QString>
 #include <QStringList>
 
+#include <vector>
+
 #include "core/Transaction.h"
 
 // The newest table layout this version of Finora understands.
@@ -63,6 +65,17 @@ public:
 
     // Loads the transaction with the given id into `result`.
     bool findTransactionById(int id, Transaction &result);
+
+    // Loads every transaction into `results`, newest date first. When two
+    // transactions have the same date, the one saved later comes first.
+    bool loadTransactions(std::vector<Transaction> &results);
+
+    // Saves new values for an existing transaction, found by transaction.id.
+    // Invalid data is refused before any SQL runs.
+    bool updateTransaction(const Transaction &transaction);
+
+    // Deletes the transaction with the given id.
+    bool deleteTransaction(int id);
 
 private:
     bool enableForeignKeys();

@@ -2,7 +2,7 @@
 
 Where each C++ concept appears in Finora's real source code. Only concepts that exist in the code are listed in the first table. Concepts that are not used yet are listed separately, with the milestone where they will appear naturally.
 
-Last updated: Milestone 2, 28 October 2026.
+Last updated: Milestone 3, 30 October 2026.
 
 ## Concepts used in the code
 
@@ -28,7 +28,15 @@ Last updated: Milestone 2, 28 October 2026.
 | Guard `if` with early `return` | Rejecting bad input before using it | `showPage`, `addTransaction`, `findTransactionById` | To stop before bad data is used | "If the database is not open, `addTransaction` returns at once with a message." |
 | `for` loops | Buttons, pages, currencies, date characters, test cases | `createNavButtons`, `isSupportedCurrency`, `isValidIsoDate`, `insertSupportedCurrencies` | Repeat a known number of times | "The loop checks each of the 10 date characters." |
 | `continue` | Skipping the two dash positions in a date | `isValidIsoDate` | To skip one loop step | "At positions 4 and 7 the loop continues to the next character." |
-| `while` loop | Reading database rows one by one | `DatabaseManager::tableNames` | The number of rows is not known in advance | "`while (query.next())` runs once per row and stops after the last row." |
+| `while` loop | Reading database rows one by one; skipping spaces at the ends of typed text | `DatabaseManager::loadTransactions`, `tableNames`, `trimSpaces` | The number of repetitions is not known in advance | "`while (query.next())` runs once per row and stops after the last row." |
+| `break` | Stopping the search once a category is found | `distinctCategories` | No need to look further | "When the category is already in the list, `break` leaves the inner loop at once." |
+| `std::vector` | The list of transactions loaded from SQLite, the filtered list, the list of categories | `loadTransactions`, `filterTransactions`, `distinctCategories`, `TransactionsPage::allTransactions` | A list whose length is not known in advance | "`push_back` adds one transaction to the end of the vector; `size()` says how many there are." |
+| Building a number from digits | `number * 10 + digit` | `parseAmount`, `digitsToNumber` | Typed text must become an exact whole number | "For 1200: 0×10+1 = 1, 1×10+2 = 12, then 120, then 1200." |
+| String searching | `find(...) != std::string::npos` | `containsIgnoringCase` | Search inside a description | "`npos` means 'not found'." |
+| Sorting | `std::sort(categories.begin(), categories.end())` | `distinctCategories` | Show categories A to Z | "The standard library sorts the vector for me." |
+| Constructor overloading | `TransactionDialog()` and `TransactionDialog(const Transaction &existing)` | `TransactionDialog.h` | One form for adding, the same form for editing | "C++ chooses the constructor whose parameters match: with an existing transaction it opens in edit mode." |
+| Reference member | `DatabaseManager &database;` | `TransactionsPage.h` | The page uses the one database created in `main()` without owning it | "A reference is another name for an existing object. It must be set in the initializer list." |
+| Modal dialog | `dialog.exec()` returns `QDialog::Accepted` or `Rejected` | `TransactionsPage::onAddClicked`, `onEditClicked` | Wait for the user to finish the form | "`exec()` waits until Save or Cancel is clicked, then returns which one." |
 | Functions | Each task has its own function | `isLeapYear`, `daysInMonth`, `validateTransaction`, `showDatabaseError` | One job per function: easy to read and test | "`isLeapYear` only answers one question, so I can test it alone." |
 | Parameters and return values | `daysInMonth(int year, int month)` returns `int` | `Transaction.cpp` | Data in, result out | "I pass 2024 and 2 and get back 29." |
 | Pass by reference | `Transaction &transaction`, `Transaction &result`, `const std::string &text` | `addTransaction`, `findTransactionById`, `isValidIsoDate` | To fill the caller's variable, or to avoid copying | "`findTransactionById` fills the `result` structure that the caller gave it." |
@@ -38,7 +46,7 @@ Last updated: Milestone 2, 28 October 2026.
 | Classes and objects | `MainWindow`, `Sidebar`, `PageHeader`, `PlaceholderPage`, `DatabaseManager` | `src/ui/`, `src/database/` | Each part of the program is one class | "`DatabaseManager database;` in `main()` creates one database object." |
 | Constructors and initializer lists | `DatabaseManager::DatabaseManager(const QString &name) : connectionName(name)` | Every class | Set up the object when it is created | "The initializer list stores the connection name before the constructor body runs." |
 | Destructor | `DatabaseManager::~DatabaseManager()` calls `close()` | `DatabaseManager.cpp` | Clean up automatically when the object is destroyed | "When `database` goes out of scope, its destructor closes the file." |
-| RAII and scope blocks | Connection closed by the destructor; `{ ... }` blocks end handle lifetimes; `QTemporaryDir` deletes test files | `DatabaseManager::open`, `close`, `finora_db_tests.cpp` | Resources are released at a predictable moment | "The braces destroy the handle before the connection is removed, so Qt never sees it still in use." |
+| RAII and scope blocks | Connection closed by the destructor; lock file released by the destructor; `{ ... }` blocks end handle lifetimes; `QTemporaryDir` deletes test files | `DatabaseManager::open`, `close`, `InstanceLock`, `main.cpp`, `finora_db_tests.cpp` | Resources are released at a predictable moment | "The braces destroy the handle before the connection is removed, so Qt never sees it still in use." |
 | Copying disabled with `= delete` | `DatabaseManager(const DatabaseManager &) = delete;` | `DatabaseManager.h` | A connection must have exactly one owner | "If copying were allowed, destroying the copy would close the original's database." |
 | Static member function | `DatabaseManager::defaultDatabasePath()` | `DatabaseManager.cpp` | Works without an object | "I can ask for the path before creating a `DatabaseManager`." |
 | Encapsulation | Private `connectionName`, `opened`, `errorMessage`; public `open`, `addTransaction`, `lastError` | `DatabaseManager.h`, `Sidebar.h` | Other code cannot break the object's state | "Nobody outside the class can set `opened` to true without really opening the file." |
@@ -48,8 +56,8 @@ Last updated: Milestone 2, 28 October 2026.
 | Header files and include guards | `#ifndef FINORA_DATABASEMANAGER_H` | Every `.h` file | Declarations in `.h`, code in `.cpp`, no double inclusion | "The guard stops a header being included twice." |
 | Modular programming | Libraries `finora_core` and `finora_database`; folders `core`, `database`, `ui`, `tests` | `CMakeLists.txt` | Small parts with one purpose | "The tests use the same libraries as the program." |
 | File handling | Reading the style sheet with `QFile`; the SQLite database file; writing test files in `finora_db_tests` | `loadStyleSheet`, `DatabaseManager`, `writeFile` in tests | Data must survive closing the program | "Every transaction is stored in `finora.db` and read back after a restart." |
-| Database operations (SQL) | `CREATE TABLE`, `INSERT`, `SELECT`, `PRAGMA` | `DatabaseManager.cpp` | Store and find records | "`SELECT ... WHERE id = :id` reads one record." |
-| Prepared statements | `query.prepare(...)` then `bindValue(...)` | `addTransaction`, `findTransactionById`, `insertSupportedCurrencies` | Values are sent separately from the SQL text | "An apostrophe in a description can never change the command." |
+| Database operations (SQL) | `CREATE TABLE`, `INSERT`, `SELECT`, `UPDATE`, `DELETE`, `PRAGMA` | `DatabaseManager.cpp` | Store, find, change and remove records | "`UPDATE ... WHERE id = :id` changes exactly one record." |
+| Prepared statements | `query.prepare(...)` then `bindValue(...)` | `addTransaction`, `updateTransaction`, `deleteTransaction`, `findTransactionById` | Values are sent separately from the SQL text | "An apostrophe in a description can never change the command." |
 | Input validation | Type, amount, currency, category, real calendar date | `validateTransaction`, `isValidIsoDate` | Stop bad data before it is saved | "29 February 2026 is rejected because 2026 is not a leap year." |
 | Error handling | `bool` results plus `lastError()`; `fail()` helper; error dialog and exit code 1 | `DatabaseManager`, `main.cpp` | The caller always knows what went wrong | "`open()` returns false and `lastError()` says why." |
 | Signals and slots | `connect(sidebar, &Sidebar::pageSelected, this, &MainWindow::showPage)` | `MainWindow` constructor | Qt calls a function when something happens | "When the sidebar emits `pageSelected`, Qt calls `showPage`." |
@@ -60,7 +68,5 @@ Last updated: Milestone 2, 28 October 2026.
 | C++ Concept | Status | Where it will appear naturally |
 |---|---|---|
 | `double` | **Planned — Not Yet Implemented** | Percentages such as budget usage, Milestone 4. Money itself stays in whole numbers |
-| `std::vector` | **Planned — Not Yet Implemented** | The list of transactions loaded from the database, Milestone 3 |
 | `do-while` loop | **Planned — Not Yet Implemented** | No natural place found yet. Please confirm whether the syllabus needs it before an example is added |
 | File writing with `std::ofstream` | **Planned — Not Yet Implemented** | CSV export, Milestone 6 |
-| Updating and deleting records (SQL `UPDATE`, `DELETE`) | **Planned — Not Yet Implemented** | Editing and deleting transactions, Milestone 3 |

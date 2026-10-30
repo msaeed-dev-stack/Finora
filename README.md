@@ -4,7 +4,7 @@
 
 Finora is a desktop personal finance and budget management application for Windows. It is written in C++17 with Qt 6 Widgets and SQLite, and is being built as a Programming Fundamentals semester project.
 
-> **Current status: Milestone 2 of 7.** The main window, sidebar navigation, visual theme, SQLite database and automated tests work. The finance screens are planned and are **not yet implemented**. Each page in the program says which milestone will add its feature.
+> **Current status: Milestone 3 of 7.** The main window, the SQLite database, the single-copy guard and the **Transactions page** work: you can add, edit, delete, search and filter income and expenses, and they are kept after closing Finora. The other finance pages are planned and are **not yet implemented**; each says which milestone will add it.
 
 ## Student details
 
@@ -43,11 +43,13 @@ Finora is an offline desktop program that records income and expenses, compares 
 | Time-of-day greeting on the dashboard | Done in Milestone 1 |
 | SQLite database created automatically, kept after closing | Done in Milestone 2 |
 | Transaction validation: amount, currency, type, category, real calendar date | Done in Milestone 2 |
-| Saving and reading transactions in the database (no screen for it yet) | Done in Milestone 2 |
+| Saving and reading transactions in the database | Done in Milestone 2 |
 | Clear error dialog if the database cannot be opened | Done in Milestone 2 |
-| Automated core, interface and database tests | Done in Milestones 1 and 2 |
-| Allow only one running copy of Finora, using Qt's QLockFile | Planned: first task of Milestone 3, before any screen can edit or save |
-| Transactions screen: add, edit, delete, search and filter | Planned: Milestone 3 |
+| Allow only one running copy of Finora, using Qt's QLockFile | Done in Milestone 3, first task |
+| Transactions page: list, add, edit, delete with confirmation | Done in Milestone 3 |
+| Search by description or category; filter by type, currency, category and period | Done in Milestone 3 |
+| Typed amounts such as 1,200.50 or 1,20,000 read exactly, with a "Will be saved as" preview | Done in Milestone 3 |
+| Automated core, interface and database tests | Done in Milestones 1 to 3 |
 | Dashboard summaries, monthly category budgets and alerts | Planned: Milestone 4 |
 | Savings goals; PKR, USD and EUR with manual exchange rates | Planned: Milestone 5 |
 | Reports and CSV export | Planned: Milestone 6 |
@@ -107,6 +109,7 @@ To open that folder, press **Win + R**, type `%LOCALAPPDATA%\Finora` and press E
 - **Restore:** close Finora, then copy your backup over `finora.db`.
 - **Start with an empty database:** close Finora and delete `finora.db`. A new, empty one is created at the next start. This permanently deletes all records.
 - **Look inside:** close Finora and open `finora.db` in any SQLite viewer, such as the free DB Browser for SQLite.
+- **`finora.lock`:** while Finora is open, this small file in the same folder marks the database as in use. A second copy of Finora sees it, says Finora is already open, and closes. Finora deletes the file when it closes. After a crash the file may stay behind; the next start sees that the old copy is no longer running and takes the lock over, so you never need to delete it yourself.
 - **If the file cannot be opened:** Finora shows the file path and the reason, then closes with exit code 1. It never runs without saving.
 
 The automated tests never use this file. They work in a temporary folder that is deleted when they finish.
@@ -115,11 +118,11 @@ Database design, schema and versioning are explained in [docs/DESIGN.md](docs/DE
 
 ## Automated tests
 
-| Test program | What it checks | Last result, 28 Oct 2026 |
+| Test program | What it checks | Last result, 30 Oct 2026, Windows |
 |---|---|---|
-| `finora_tests` | Greeting, leap years, days per month, real calendar dates, currencies, transaction validation | 59 of 59 checks pass |
-| `finora_ui_tests` | The real main window: 7 pages, 7 buttons, starts on the dashboard, every button opens its own page and is the only one selected | 22 of 22 checks pass |
-| `finora_db_tests` | Real SQLite files: creating and reopening the database, saving and reading, punctuation and Urdu text, invalid data, error messages, open failures, data kept after closing, SQLite's own rules | 62 of 62 checks pass |
+| `finora_tests` | Greeting, leap years, days per month, real calendar dates, currencies, transaction validation, reading and formatting amounts, search and filters | 115 of 115 checks pass |
+| `finora_ui_tests` | The real main window and sidebar; the Transactions page on a real database: add through the form, cancel, search, every filter, edit, delete with Yes and No, a database error, and the data after a restart; the form's validation | 76 of 76 checks pass |
+| `finora_db_tests` | Real SQLite files: creating and reopening, saving, reading, updating, deleting, punctuation and Urdu text, invalid data, error messages, open failures, data kept after closing, SQLite's own rules, ids never reused, only one running copy | 93 of 93 checks pass |
 
 Run a test program directly to see every check:
 
@@ -138,14 +141,19 @@ Finora/
 │   ├── main.cpp               Program entry point: theme, database, window
 │   ├── core/                  Plain C++ logic without Qt, tested directly
 │   │   ├── Greeting.h/.cpp        Time-of-day greeting
-│   │   └── Transaction.h/.cpp     Transaction record, currencies, validation, dates
+│   │   ├── Transaction.h/.cpp     Transaction record, currencies, categories, validation, dates
+│   │   ├── Money.h/.cpp           Reading typed amounts; writing 1,200.50
+│   │   └── TransactionFilter.h/.cpp  Search and filters
 │   ├── database/              All SQL lives here
-│   │   └── DatabaseManager.h/.cpp Open SQLite, create tables, save and read
+│   │   ├── DatabaseManager.h/.cpp Open SQLite, create tables, load, save, update, delete
+│   │   └── InstanceLock.h/.cpp    Let only one copy of Finora run at a time
 │   └── ui/                    Qt Widgets user interface
 │       ├── MainWindow.h/.cpp      Window: sidebar and page area
 │       ├── Sidebar.h/.cpp         Logo and navigation buttons
 │       ├── PageHeader.h/.cpp      Title and subtitle used on every page
 │       ├── PlaceholderPage.h/.cpp "Coming in Milestone N" page
+│       ├── TransactionsPage.h/.cpp   The Transactions page
+│       ├── TransactionDialog.h/.cpp  The Add / Edit Transaction form
 │       └── Theme.h/.cpp           Style, font and style sheet
 ├── resources/
 │   ├── icons/                 Hand-drawn SVG icons, grey and white versions
@@ -163,12 +171,17 @@ Finora/
 - [Requirements checklist](docs/REQUIREMENTS_CHECKLIST.md)
 - [C++ concepts map](docs/CPP_CONCEPTS_MAP.md)
 - [Viva preparation](docs/VIVA_PREPARATION.md)
+- [Milestone 3 demonstration guide](docs/DEMO_MILESTONE3.md)
 
-## Known limitations at Milestone 2
+## Known limitations at Milestone 3
 
-- There is no screen for entering transactions yet. The database can save and read them, as the automated tests show, but the pages are still placeholders.
+- The Transactions page shows no totals yet. Totals per currency, with checked addition, come with the dashboard in Milestone 4.
+- Search and filters work on the list already loaded into memory. That is fast for one person's records; very large data sets would need filtering in SQL.
+- Search ignores upper and lower case only for the English letters A to Z.
+- The table is always sorted newest first; clicking a column header does not re-sort it.
+- Categories are free text with suggestions, so "Food" and "food" count as two categories.
 - Budgets, savings goals and exchange rates have no tables yet. Budgets arrive in Milestone 4 as schema version 2.
 - Light theme only.
 - The build paths assume Qt is installed in `C:\Qt`.
 - The greeting is chosen when the window opens and does not change while the window stays open.
-- Nothing stops two copies of Finora from running at the same time yet. SQLite lets only one program write to the database at a time. In tests where two programs saved at the same moment, saving became very slow and some saves were rejected with a "database is locked" error. A save that cannot get the lock within about 6 seconds is rejected and not stored. Those tests found no damaged data, but they do not prove that every way of using two copies is safe, so use one Finora window at a time. Details are in [docs/DESIGN.md](docs/DESIGN.md), section 7.9.
+- Only one copy of Finora can run at a time, because SQLite lets only one program write to the database at once. A second copy says Finora is already open and closes. This is checked per Windows user account; two different Windows users have separate data folders and separate databases. Details are in [docs/DESIGN.md](docs/DESIGN.md), section 7.9.

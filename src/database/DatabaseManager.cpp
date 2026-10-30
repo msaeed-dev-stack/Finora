@@ -11,6 +11,38 @@
 #include <QStandardPaths>
 #include <QVariant>
 
+// ---- Helpers used only in this file ----------------------------------
+
+// Fills the placeholders :type, :amount, :currency, :category,
+// :description and :date of a prepared INSERT or UPDATE statement.
+void bindTransactionValues(QSqlQuery &query, const Transaction &transaction)
+{
+    query.bindValue(":type", QString::fromStdString(transaction.type));
+    query.bindValue(":amount", transaction.amountMinor);
+    query.bindValue(":currency", QString::fromStdString(transaction.currencyCode));
+    query.bindValue(":category", QString::fromStdString(transaction.category));
+    query.bindValue(":description", QString::fromStdString(transaction.description));
+    query.bindValue(":date", QString::fromStdString(transaction.date));
+}
+
+// Copies the current row of a query into a Transaction. The query must
+// select: id, type, amount_minor, currency_code, category, description,
+// transaction_date, in that order.
+Transaction readTransactionRow(const QSqlQuery &query)
+{
+    Transaction transaction;
+    transaction.id = query.value(0).toInt();
+    transaction.type = query.value(1).toString().toStdString();
+    transaction.amountMinor = query.value(2).toLongLong();
+    transaction.currencyCode = query.value(3).toString().toStdString();
+    transaction.category = query.value(4).toString().toStdString();
+    transaction.description = query.value(5).toString().toStdString();
+    transaction.date = query.value(6).toString().toStdString();
+    return transaction;
+}
+
+// ---- DatabaseManager --------------------------------------------------
+
 DatabaseManager::DatabaseManager(const QString &name)
     : connectionName(name)
 {
@@ -182,12 +214,7 @@ bool DatabaseManager::addTransaction(Transaction &transaction)
         return fail("Could not prepare to save the transaction: " + query.lastError().text());
     }
 
-    query.bindValue(":type", QString::fromStdString(transaction.type));
-    query.bindValue(":amount", transaction.amountMinor);
-    query.bindValue(":currency", QString::fromStdString(transaction.currencyCode));
-    query.bindValue(":category", QString::fromStdString(transaction.category));
-    query.bindValue(":description", QString::fromStdString(transaction.description));
-    query.bindValue(":date", QString::fromStdString(transaction.date));
+    bindTransactionValues(query, transaction);
 
     if (!query.exec()) {
         return fail("Could not save the transaction: " + query.lastError().text());
@@ -223,14 +250,91 @@ bool DatabaseManager::findTransactionById(int id, Transaction &result)
         return fail("No transaction with id " + QString::number(id) + " was found.");
     }
 
-    // The column numbers follow the order of the SELECT list above.
-    result.id = query.value(0).toInt();
-    result.type = query.value(1).toString().toStdString();
-    result.amountMinor = query.value(2).toLongLong();
-    result.currencyCode = query.value(3).toString().toStdString();
-    result.category = query.value(4).toString().toStdString();
-    result.description = query.value(5).toString().toStdString();
-    result.date = query.value(6).toString().toStdString();
+    result = readTransactionRow(query);
+    return true;
+}
+
+bool DatabaseManager::loadTransactions(std::vector<Transaction> &results)
+{
+    errorMessage.clear();
+    results.clear();
+    if (!opened) {
+        return fail("The database is not open.");
+    }
+
+    // No values come from the user here, so a plain query is enough.
+    QSqlQuery query(QSqlDatabase::database(connectionName, false));
+    if (!query.exec("SELECT id, type, amount_minor, currency_code, category, description, transaction_date "
+                    "FROM transactions ORDER BY transaction_date DESC, id DESC")) {
+        return fail("Could not load the transactions: " + query.lastError().text());
+    }
+
+    // One row at a time until next() returns false after the last row.
+    while (query.next()) {
+        results.push_back(readTransactionRow(query));
+    }
+    return true;
+}
+
+bool DatabaseManager::updateTransaction(const Transaction &transaction)
+{
+    errorMessage.clear();
+    if (!opened) {
+        return fail("The database is not open.");
+    }
+    if (transaction.id <= 0) {
+        return fail("A transaction id must be a number above 0.");
+    }
+
+    std::string problem = validateTransaction(transaction);
+    if (!problem.empty()) {
+        return fail(QString::fromStdString(problem));
+    }
+
+    QSqlQuery query(QSqlDatabase::database(connectionName, false));
+    bool prepared = query.prepare(
+        "UPDATE transactions SET type = :type, amount_minor = :amount, currency_code = :currency, "
+        "category = :category, description = :description, transaction_date = :date "
+        "WHERE id = :id");
+    if (!prepared) {
+        return fail("Could not prepare to update the transaction: " + query.lastError().text());
+    }
+    bindTransactionValues(query, transaction);
+    query.bindValue(":id", transaction.id);
+
+    if (!query.exec()) {
+        return fail("Could not update the transaction: " + query.lastError().text());
+    }
+    // numRowsAffected() tells how many rows the UPDATE changed: 0 means no such id.
+    if (query.numRowsAffected() == 0) {
+        return fail("No transaction with id " + QString::number(transaction.id) + " was found.");
+    }
+    return true;
+}
+
+bool DatabaseManager::deleteTransaction(int id)
+{
+    errorMessage.clear();
+    if (!opened) {
+        return fail("The database is not open.");
+    }
+    if (id <= 0) {
+        return fail("A transaction id must be a number above 0.");
+    }
+
+    QSqlQuery query(QSqlDatabase::database(connectionName, false));
+    bool prepared = query.prepare("DELETE FROM transactions WHERE id = :id");
+    if (!prepared) {
+        return fail("Could not prepare to delete the transaction: " + query.lastError().text());
+    }
+    query.bindValue(":id", id);
+
+    if (!query.exec()) {
+        return fail("Could not delete the transaction: " + query.lastError().text());
+    }
+    if (query.numRowsAffected() == 0) {
+        return fail("No transaction with id " + QString::number(id) + " was found.");
+    }
     return true;
 }
 

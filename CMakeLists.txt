@@ -11,7 +11,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(Finora
-    VERSION 0.2.0
+    VERSION 0.3.0
     DESCRIPTION "Desktop personal finance and budget management system"
     LANGUAGES CXX)
 
@@ -42,18 +42,24 @@ endif()
 add_library(finora_core STATIC
     src/core/Greeting.h       src/core/Greeting.cpp
     src/core/Transaction.h    src/core/Transaction.cpp
+    src/core/Money.h          src/core/Money.cpp
+    src/core/TransactionFilter.h  src/core/TransactionFilter.cpp
 )
 target_include_directories(finora_core PUBLIC src)
 target_compile_options(finora_core PRIVATE ${FINORA_WARNINGS})
 
 # =====================================================================
-#  2. finora_database - every SQL statement in Finora lives here.
+#  2. finora_database - every SQL statement in Finora lives here,
+#     together with the lock that lets only one copy of Finora use
+#     the database at a time.
 #     Qt SQL is linked PRIVATE: code that uses this library does not
-#     see any SQL classes, only DatabaseManager.
+#     see any SQL classes, only DatabaseManager and InstanceLock.
 # =====================================================================
 add_library(finora_database STATIC
     src/database/DatabaseManager.h
     src/database/DatabaseManager.cpp
+    src/database/InstanceLock.h
+    src/database/InstanceLock.cpp
 )
 target_include_directories(finora_database PUBLIC src)
 target_link_libraries(finora_database
@@ -72,6 +78,8 @@ set(FINORA_UI_SOURCES
     src/ui/PageHeader.h       src/ui/PageHeader.cpp
     src/ui/PlaceholderPage.h  src/ui/PlaceholderPage.cpp
     src/ui/Theme.h            src/ui/Theme.cpp
+    src/ui/TransactionsPage.h   src/ui/TransactionsPage.cpp
+    src/ui/TransactionDialog.h  src/ui/TransactionDialog.cpp
 )
 
 # Icons and the style sheet. They are built into the .exe file,
@@ -85,6 +93,7 @@ set(FINORA_RESOURCE_FILES
     resources/icons/reports.svg       resources/icons/reports_active.svg
     resources/icons/currency.svg      resources/icons/currency_active.svg
     resources/icons/settings.svg      resources/icons/settings_active.svg
+    resources/icons/chevron_down.svg
     resources/styles/light.qss
 )
 
@@ -154,12 +163,14 @@ qt_add_resources(finora_ui_tests "finora_ui_test_resources"
     FILES ${FINORA_RESOURCE_FILES}
 )
 target_include_directories(finora_ui_tests PRIVATE src)
-target_link_libraries(finora_ui_tests PRIVATE finora_core Qt6::Widgets)
+target_link_libraries(finora_ui_tests PRIVATE finora_core finora_database Qt6::Widgets)
 target_compile_options(finora_ui_tests PRIVATE ${FINORA_WARNINGS})
 target_compile_definitions(finora_ui_tests PRIVATE FINORA_VERSION="${PROJECT_VERSION}")
 add_test(NAME ui_tests COMMAND finora_ui_tests)
 # "offscreen" draws windows in memory, so nothing pops up during tests.
+# TIMEOUT stops the test after 120 s if a pop-up window ever waits forever.
 set_tests_properties(ui_tests PROPERTIES
+    TIMEOUT 120
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${FINORA_QT_PLUGINS_DIR}")
 
 # 4c. Database tests: real SQLite files inside a temporary folder.

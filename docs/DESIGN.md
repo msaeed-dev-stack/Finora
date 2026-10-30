@@ -2,7 +2,7 @@
 
 This document explains how Finora is organised and how its algorithms work. It describes only what exists in the code. Anything not built yet is marked **Planned — Not Yet Implemented**.
 
-Last updated: Milestone 2, 28 October 2026.
+Last updated: Milestone 3, 30 October 2026.
 
 ## 1. Architecture
 
@@ -10,9 +10,9 @@ Finora is split into layers. Each layer has one job.
 
 | Layer | Folder | Job | Uses Qt? | Status |
 |---|---|---|---|---|
-| Core logic | `src/core` | Rules in plain C++: greeting, transaction validation, dates, currencies | No | Done for Milestones 1 and 2 |
-| Database | `src/database` | Open the SQLite file, create tables, save and read transactions | Yes, Qt SQL | Done for Milestone 2 |
-| User interface | `src/ui` | Window, sidebar, pages, theme | Yes, Qt Widgets | Navigation shell done |
+| Core logic | `src/core` | Rules in plain C++: greeting, transaction validation, dates, currencies, reading and writing amounts, search and filters | No | Done for Milestones 1 to 3 |
+| Database | `src/database` | Open the SQLite file, create tables; load, save, update and delete transactions; the single-copy lock | Yes, Qt SQL | Done for Milestones 2 and 3 |
+| User interface | `src/ui` | Window, sidebar, theme, the Transactions page and its form | Yes, Qt Widgets | Navigation and Transactions page done |
 | Tests | `tests` | Check the core, the window and the database automatically | Core tests no; the others yes | 3 test programs |
 
 ```mermaid
@@ -38,10 +38,13 @@ flowchart TD
     A([Start Finora.exe]) --> B["main creates QApplication"]
     B --> C["applyLightTheme: Fusion style, light colours, Segoe UI font"]
     C --> D["DatabaseManager database; path = defaultDatabasePath"]
-    D --> E{"database.open path succeeded?"}
+    D --> L{"instanceLock.tryLock succeeded?"}
+    L -- "No, another copy runs" --> M["Finora is already open"]
+    M --> G([Exit with code 1])
+    L -- Yes --> E{"database.open path succeeded?"}
     E -- No --> F["Error dialog with the file path and the reason"]
-    F --> G([Exit with code 1])
-    E -- Yes --> H["Create MainWindow: sidebar and 7 pages"]
+    F --> G
+    E -- Yes --> H["Create MainWindow database: sidebar and 7 pages; the Transactions page loads its rows"]
     H --> I["app.exec: wait for user actions"]
     I --> J["Window closed: window destroyed, then database closed"]
     J --> K([Exit with code 0])
@@ -52,13 +55,16 @@ Pseudocode for `main()` in `src/main.cpp`:
 ```text
 CREATE the Qt application and set its name and version
 CALL applyLightTheme(application)
-CREATE a DatabaseManager called database
 path = DatabaseManager::defaultDatabasePath()
+IF NOT instanceLock.tryLock() THEN         // finora.lock next to finora.db
+    SHOW "already open" or the error, RETURN 1
+END IF
+CREATE a DatabaseManager called database
 IF NOT database.open(path) THEN
     SHOW an error dialog with path and database.lastError()
     RETURN 1                         // Finora never runs without saving
 END IF
-CREATE and SHOW the main window
+CREATE the main window, giving it the database, and SHOW it
 RUN the event loop until the window is closed
 RETURN the exit code                 // database closes automatically (RAII)
 ```
@@ -151,9 +157,12 @@ FUNCTION addChecked(total, amount)
 END FUNCTION
 ```
 
+**Implemented in Milestone 3:**
+
+6. A typed amount with more than two decimals is rejected, not rounded. `parseAmount()` in `src/core/Money.cpp` reads the text digit by digit without ever using a `double`; see section 9.2.
+
 **Planned — Not Yet Implemented:**
 
-6. A typed amount with more than two decimals will be rejected, not rounded (Milestone 3, when amounts are typed in a form).
 7. Exchange rates will be stored to four decimal places, and a conversion will round once to the nearest paisa or cent, with halves rounding up (Milestone 5).
 8. Totals will always be shown per currency. A converted total will be labelled as converted and show the rate used (Milestones 4 and 5).
 
@@ -266,7 +275,7 @@ RETURN true
 
 ### 7.9 Two copies of Finora at the same time
 
-Nothing stops a second copy of Finora from opening the same database yet. SQLite lets several programs read the file, but only one can write at a time. A program that wants to write while another holds the write lock must wait, and Qt's SQLite driver gives up after a timeout.
+Before the single-instance guard below existed, nothing stopped a second copy of Finora from opening the same database. SQLite lets several programs read the file, but only one can write at a time. A program that wants to write while another holds the write lock must wait, and Qt's SQLite driver gives up after a timeout.
 
 Measured on 28 October 2026 with temporary databases and Finora's real `DatabaseManager`:
 
@@ -279,7 +288,24 @@ Measured on 28 October 2026 with temporary databases and Finora's real `Database
 
 A rejected save is not stored: `addTransaction` returns `false` and `lastError()` holds the reason. No test damaged a database, but these tests do not prove that every way of using two copies is safe.
 
-**Planned — Not Yet Implemented (first task of Milestone 3, before any screen can edit or save):** a single-instance guard. Before opening the database, `main()` will lock a file named `finora.lock` in the data folder with Qt's `QLockFile`. If another copy of Finora holds the lock, Finora will say that it is already open and exit. SQLite's journal mode stays at its default, and no retry framework is added.
+**Single-instance guard (done, first task of Milestone 3).** `src/database/InstanceLock.h/.cpp` wraps Qt's `QLockFile`. Before opening the database, `main()` locks a file named `finora.lock` in the same folder as `finora.db`:
+
+```text
+lock = InstanceLock(folder of finora.db + "/finora.lock")
+IF lock.tryLock() fails THEN
+    IF another copy holds it THEN show "Finora is already open"
+    ELSE show the database error dialog with the reason
+    EXIT with code 1
+open the database, show the window ...
+```
+
+- `tryLock(0)` tries once and does not wait, so a second copy closes at once instead of hanging.
+- `setStaleLockTime(0)` switches off Qt's default rule that a lock older than 30 seconds is abandoned. Without it, a second copy started 30 seconds after the first would take the lock away from a Finora that is still open.
+- A lock left behind by a crash is still taken over, because `QLockFile` writes the program's process number into the file and checks whether that program is still running.
+- `instanceLock` is declared before `database` in `main()`, so C++ destroys it after the database is closed: the lock is never released while the database is still open (RAII).
+- The data folder is per Windows user, so the guard stops two copies for the same user. Two different users have separate databases and do not block each other.
+
+SQLite's journal mode stays at its default, and no retry framework is added. `finora_db_tests` checks the guard: a second lock on the same file is refused with "already running", the file disappears when the first lock is released, a lock from a program that is no longer running is taken over, and a lock file that cannot be created is reported as an error, not as "already running".
 
 ## 8. Validation algorithms
 
@@ -310,3 +336,124 @@ RETURN true
 Example: `"2026-02-29"` passes the shape and digit checks, gives year 2026, month 2 and day 29. `daysInMonth(2026, 2)` is 28 because 2026 is not a leap year, and 29 > 28, so the date is rejected.
 
 **Whole transaction.** `validateTransaction()` checks, in this order: type, amount above 0, amount at most the maximum, supported currency, non-blank category, real date. It returns the message for the first problem, or an empty string when everything is valid.
+
+## 9. Transactions page (Milestone 3)
+
+### 9.1 Who does what
+
+| Part | File | Job |
+|---|---|---|
+| `TransactionsPage` | `src/ui/TransactionsPage.h/.cpp` | The page: table, search box, filters, Edit / Delete / Add buttons, messages |
+| `TransactionDialog` | `src/ui/TransactionDialog.h/.cpp` | The pop-up form for adding or editing one transaction |
+| `parseAmount`, `formatAmount`, `formatMoney` | `src/core/Money.h/.cpp` | Read "1,200.50" as 120050; write 120050 as "1,200.50" |
+| `TransactionFilter`, `filterTransactions`, `distinctCategories` | `src/core/TransactionFilter.h/.cpp` | Search and filters with plain loops over a `std::vector` |
+| `loadTransactions`, `updateTransaction`, `deleteTransaction` | `src/database/DatabaseManager.cpp` | The SQL: SELECT all rows, UPDATE one row, DELETE one row |
+
+`main()` creates the only `DatabaseManager`. `MainWindow` receives it as a reference and passes it to `TransactionsPage`, which keeps the reference as a member. The page *uses* the database but does not *own* it, so it never opens or closes it.
+
+### 9.2 Reading a typed amount: `parseAmount`
+
+```text
+FUNCTION parseAmount(text, amountMinor)
+    text = text without spaces at both ends
+    IF text is empty THEN RETURN "Please enter an amount."
+    IF text starts with '-' THEN RETURN "Amount must be greater than zero."
+    whole = 0, fraction = 0, fractionDigits = 0, seenPoint = false
+    FOR each character c of text
+        IF c is a digit THEN
+            IF seenPoint THEN
+                fractionDigits = fractionDigits + 1
+                IF fractionDigits > 2 THEN RETURN "Use at most two digits after the decimal point."
+                fraction = fraction * 10 + digit
+            ELSE
+                whole = whole * 10 + digit
+                IF whole > 9,999,999,999 THEN RETURN "Amount is too large..."
+        ELSE IF c is '.' THEN
+            IF seenPoint THEN RETURN "An amount can have only one decimal point."
+            seenPoint = true
+        ELSE IF c is ',' THEN
+            IF it is not between two digits of the whole number THEN RETURN "Commas may only separate digits..."
+        ELSE
+            RETURN "An amount may contain only digits, commas and one decimal point."
+    IF exactly one digit came after the point THEN fraction = fraction * 10     // "0.5" is 50 paisa
+    result = whole * 100 + fraction
+    IF result <= 0 THEN RETURN "Amount must be greater than zero."
+    amountMinor = result
+    RETURN ""                                                                 // success
+END FUNCTION
+```
+
+Example: "1,200.50". The digits 1, 2, 0, 0 give `whole = 1200`; the comma sits between two digits, so it is allowed and ignored; after the point, 5 and 0 give `fraction = 50`. The result is `1200 * 100 + 50 = 120050`. No `double` is used anywhere, so there is no rounding error. Both "1,200" and the Pakistani form "1,20,000" are accepted. The form shows "Will be saved as PKR 1,200.50" while the user types, so any doubt about commas is visible before saving.
+
+`formatAmount` goes the other way: it splits 120050 into 1200 and 50, then walks the digits of 1200 from the right and puts a comma after every third digit, giving "1,200.50".
+
+### 9.3 Search and filters
+
+The page keeps every transaction loaded from SQLite in a `std::vector<Transaction>`. Each change in the filter bar builds a `TransactionFilter` and calls `filterTransactions`, which loops over the vector and keeps the transactions for which `matchesFilter` is true. Empty filter fields mean "any".
+
+```text
+FUNCTION matchesFilter(t, filter)
+    IF filter.type is set AND t.type is different THEN RETURN false
+    IF filter.currency is set AND t.currency is different THEN RETURN false
+    IF filter.category is set AND t.category is different THEN RETURN false
+    IF filter.fromDate is set AND t.date < filter.fromDate THEN RETURN false
+    IF filter.toDate is set AND t.date > filter.toDate THEN RETURN false
+    IF filter.searchText is set AND it is in neither t.description nor t.category THEN RETURN false
+    RETURN true
+END FUNCTION
+```
+
+- Dates are compared as text. This works because YYYY-MM-DD puts the year first: "2026-09-30" < "2026-10-01".
+- The search ignores upper and lower case: both texts are changed to lower case with `toLowerText` first.
+- "This month", "Last month" and "This year" are turned into a first and a last date with `QDate` in `TransactionsPage::currentFilter`, using a `switch`.
+- **Why filter in C++ and not in SQL?** One person's records fit easily in memory, the logic is plain loops and `if` statements that the core tests check without a database, and the SQL stays simple. For very large data sets, a `WHERE` clause in SQL would be better.
+
+### 9.4 From the screen to SQLite and back
+
+**Adding a transaction:**
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Page as TransactionsPage
+    participant Form as TransactionDialog
+    participant Core as Core rules
+    participant DB as DatabaseManager
+    participant File as finora.db
+    User->>Page: clicks "+ Add Transaction"
+    Page->>Form: exec() opens the form and waits
+    User->>Form: fills the fields, clicks Save
+    Form->>Core: parseAmount, then validateTransaction
+    Core-->>Form: "" (valid) or a message
+    Form-->>Page: accept(): exec() returns Accepted
+    Page->>DB: addTransaction(transaction)
+    DB->>Core: validateTransaction again
+    DB->>File: prepared INSERT with bound values
+    File-->>DB: new row id
+    Page->>DB: loadTransactions(allTransactions)
+    DB->>File: SELECT ... ORDER BY date DESC, id DESC
+    Page->>Page: filterTransactions, then fill the table
+    Page-->>User: new row and "Transaction added."
+```
+
+**Editing** works the same way. The page finds the selected row's id, which each row keeps hidden in its first cell with `Qt::UserRole`. It copies that transaction from the vector into `TransactionDialog(existing)`, then calls `updateTransaction`, which runs a prepared `UPDATE ... WHERE id = :id`.
+
+**Deleting** asks first with `QMessageBox::question`, with "No" as the default. Only "Yes" calls `deleteTransaction`, which runs a prepared `DELETE ... WHERE id = :id`. If no row had that id, `numRowsAffected()` is 0, and the user gets "No transaction with id N was found." instead of a false success.
+
+After every add, edit or delete, the page reloads all rows from SQLite instead of changing the table by hand, so the screen always shows exactly what is stored.
+
+### 9.5 Messages and errors
+
+| Situation | What the user sees |
+|---|---|
+| Wrong input in the form | A red line in the form, for example "Use at most two digits after the decimal point."; the form stays open |
+| Saved, updated or deleted | A green banner, for example "Transaction added.", hidden after 4 seconds by a single-shot `QTimer` |
+| Database refuses or fails | A warning box: "Could not save the transaction. Reason: ..." The table does not change |
+| Nothing saved yet | "No transactions yet. Click "Add Transaction" to record your first income or expense." |
+| Filters hide every row | "No transactions match these filters." |
+
+### 9.6 Why this design
+
+- **Edit and Delete act on the selected row.** One Edit and one Delete button are simpler to build and explain than a pair of buttons inside every row. Double-clicking a row also opens it for editing.
+- **The form validates before closing.** The page only ever receives a valid transaction, and `DatabaseManager` checks again, so data is protected even if code calls it directly.
+- **No schema change.** The Milestone 2 tables already had every column the page needs, so the database stays at schema version 1.

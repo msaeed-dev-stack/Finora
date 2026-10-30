@@ -40,6 +40,20 @@ const CurrencyInfo SUPPORTED_CURRENCIES[SUPPORTED_CURRENCY_COUNT] = {
     {"EUR", "Euro",            "€",  2}
 };
 
+// ---- Suggested categories --------------------------------------------
+// Shown in the category list of the transaction form. The user may also
+// type a category of their own.
+const int EXPENSE_CATEGORY_COUNT = 9;
+const std::string EXPENSE_CATEGORIES[EXPENSE_CATEGORY_COUNT] = {
+    "Food", "Transport", "Bills & Utilities", "Rent", "Shopping",
+    "Health", "Education", "Entertainment", "Other"
+};
+
+const int INCOME_CATEGORY_COUNT = 5;
+const std::string INCOME_CATEGORIES[INCOME_CATEGORY_COUNT] = {
+    "Salary", "Freelance", "Business", "Gift", "Other"
+};
+
 // ---- One transaction -------------------------------------------------
 struct Transaction {
     int id = 0;                  // 0 until the database gives the record its number
