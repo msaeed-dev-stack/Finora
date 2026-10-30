@@ -29,8 +29,28 @@ e80a2c37e47ec09bff5a9960257bf9001e87d5fb7bf35719ef4958763a0c70ac  Manrope-SemiBo
 
 | Library | Used for | Licence |
 |---|---|---|
+| libsodium 1.0.22 (`libsodium-26.dll`) | Argon2id password hashing, secure random recovery codes, wiping secrets from memory | ISC License, Copyright (c) 2013-2026 Frank Denis. Full text in `third_party/libsodium-1.0.22/LICENSE`. The official prebuilt MinGW DLL is used unchanged; its minisign signature and checksums are recorded in `third_party/libsodium-1.0.22/VERIFICATION.md` |
 | Qt 6.12 (Core, Gui, Widgets, Sql, Svg) | Windows, widgets, the SQLite connection, drawing the icons | GNU LGPL version 3. Finora links to the Qt DLLs dynamically; `windeployqt` copies them next to Finora.exe unchanged |
 | SQLite (inside Qt's `qsqlite` driver) | The database file | Public domain |
 | MinGW-w64 runtime (copied by `windeployqt`) | C++ runtime DLLs | Its own permissive licences, including the GCC Runtime Library Exception |
+
+The ISC License of libsodium:
+
+```text
+Copyright (c) 2013-2026
+Frank Denis <j at pureftpd dot org>
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+```
 
 No other outside code is included. The icons and the Finora logo were drawn for this project.

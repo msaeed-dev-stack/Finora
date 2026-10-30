@@ -45,6 +45,11 @@ CMakeLists.txt.user*
 *.ilk
 *.exp
 
+# ---- Exception: the vendored, signature-verified libsodium files ARE kept ----
+# (see third_party/libsodium-1.0.22/VERIFICATION.md)
+!third_party/**/*.dll
+!third_party/**/*.a
+
 # ---- Packaged Windows builds (windeployqt output and zip files) ----
 dist/
 deploy/
