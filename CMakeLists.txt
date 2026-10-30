@@ -11,7 +11,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(Finora
-    VERSION 0.3.0
+    VERSION 0.4.0
     DESCRIPTION "Desktop personal finance and budget management system"
     LANGUAGES CXX)
 
@@ -20,9 +20,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# ---- Qt 6: Widgets gives us windows, buttons and layouts, ----
-# ---- and Sql gives database access (used only by finora_database) ----
-find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Sql)
+# ---- Qt 6: Widgets gives us windows, buttons and layouts, Sql gives ----
+# ---- database access (used only by finora_database), and Svg draws  ----
+# ---- the icons in the colours of the current theme.                 ----
+find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Sql Svg)
 
 # Turns on Qt's code generators: moc (for signals and slots) and
 # rcc (for icons and style sheets that are built into the program).
@@ -44,6 +45,8 @@ add_library(finora_core STATIC
     src/core/Transaction.h    src/core/Transaction.cpp
     src/core/Money.h          src/core/Money.cpp
     src/core/TransactionFilter.h  src/core/TransactionFilter.cpp
+    src/core/Totals.h         src/core/Totals.cpp
+    src/core/Budget.h         src/core/Budget.cpp
 )
 target_include_directories(finora_core PUBLIC src)
 target_compile_options(finora_core PRIVATE ${FINORA_WARNINGS})
@@ -53,13 +56,15 @@ target_compile_options(finora_core PRIVATE ${FINORA_WARNINGS})
 #     together with the lock that lets only one copy of Finora use
 #     the database at a time.
 #     Qt SQL is linked PRIVATE: code that uses this library does not
-#     see any SQL classes, only DatabaseManager and InstanceLock.
+#     see any SQL classes, only DatabaseManager, BudgetStore and InstanceLock.
 # =====================================================================
 add_library(finora_database STATIC
     src/database/DatabaseManager.h
     src/database/DatabaseManager.cpp
     src/database/InstanceLock.h
     src/database/InstanceLock.cpp
+    src/database/BudgetStore.h
+    src/database/BudgetStore.cpp
 )
 target_include_directories(finora_database PUBLIC src)
 target_link_libraries(finora_database
@@ -80,21 +85,38 @@ set(FINORA_UI_SOURCES
     src/ui/Theme.h            src/ui/Theme.cpp
     src/ui/TransactionsPage.h   src/ui/TransactionsPage.cpp
     src/ui/TransactionDialog.h  src/ui/TransactionDialog.cpp
+    src/ui/Page.h
+    src/ui/UiHelpers.h        src/ui/UiHelpers.cpp
+    src/ui/DashboardPage.h    src/ui/DashboardPage.cpp
+    src/ui/BudgetsPage.h      src/ui/BudgetsPage.cpp
+    src/ui/BudgetDialog.h     src/ui/BudgetDialog.cpp
+    src/ui/SettingsPage.h     src/ui/SettingsPage.cpp
+    src/ui/components/Toast.h           src/ui/components/Toast.cpp
+    src/ui/components/MonthSwitcher.h   src/ui/components/MonthSwitcher.cpp
+    src/ui/components/ProgressRing.h    src/ui/components/ProgressRing.cpp
+    src/ui/components/WalletCard.h      src/ui/components/WalletCard.cpp
+    src/ui/components/MoneyFlowChart.h  src/ui/components/MoneyFlowChart.cpp
 )
 
-# Icons and the style sheet. They are built into the .exe file,
-# so the program never depends on loose image files.
+# Icons, fonts (with their licences) and the style sheet. They are built
+# into the .exe file, so the program never depends on loose files.
+# The icons draw with "currentColor"; Theme.cpp colours them at run time.
 set(FINORA_RESOURCE_FILES
     resources/icons/logo.svg
-    resources/icons/dashboard.svg     resources/icons/dashboard_active.svg
-    resources/icons/transactions.svg  resources/icons/transactions_active.svg
-    resources/icons/budgets.svg       resources/icons/budgets_active.svg
-    resources/icons/goals.svg         resources/icons/goals_active.svg
-    resources/icons/reports.svg       resources/icons/reports_active.svg
-    resources/icons/currency.svg      resources/icons/currency_active.svg
-    resources/icons/settings.svg      resources/icons/settings_active.svg
-    resources/icons/chevron_down.svg
-    resources/styles/light.qss
+    resources/icons/dashboard.svg      resources/icons/transactions.svg
+    resources/icons/budgets.svg        resources/icons/goals.svg
+    resources/icons/reports.svg        resources/icons/currency.svg
+    resources/icons/settings.svg
+    resources/icons/chevron_left.svg   resources/icons/chevron_right.svg
+    resources/icons/chevron_down_light.svg  resources/icons/chevron_down_dark.svg
+    resources/icons/check_circle.svg   resources/icons/check_white.svg
+    resources/icons/moon.svg           resources/icons/sun.svg
+    resources/fonts/Inter-Regular.ttf  resources/fonts/Inter-Medium.ttf
+    resources/fonts/Inter-SemiBold.ttf resources/fonts/Inter-Bold.ttf
+    resources/fonts/Inter-OFL.txt
+    resources/fonts/Manrope-SemiBold.ttf  resources/fonts/Manrope-Bold.ttf
+    resources/fonts/Manrope-ExtraBold.ttf resources/fonts/Manrope-OFL.txt
+    resources/styles/finora.qss
 )
 
 qt_add_executable(Finora WIN32
@@ -107,7 +129,7 @@ qt_add_resources(Finora "finora_resources"
     FILES ${FINORA_RESOURCE_FILES}
 )
 target_include_directories(Finora PRIVATE src)
-target_link_libraries(Finora PRIVATE finora_core finora_database Qt6::Widgets)
+target_link_libraries(Finora PRIVATE finora_core finora_database Qt6::Widgets Qt6::Svg)
 target_compile_options(Finora PRIVATE ${FINORA_WARNINGS})
 # The version number above is passed to the C++ code as FINORA_VERSION.
 target_compile_definitions(Finora PRIVATE FINORA_VERSION="${PROJECT_VERSION}")
@@ -163,7 +185,7 @@ qt_add_resources(finora_ui_tests "finora_ui_test_resources"
     FILES ${FINORA_RESOURCE_FILES}
 )
 target_include_directories(finora_ui_tests PRIVATE src)
-target_link_libraries(finora_ui_tests PRIVATE finora_core finora_database Qt6::Widgets)
+target_link_libraries(finora_ui_tests PRIVATE finora_core finora_database Qt6::Widgets Qt6::Svg)
 target_compile_options(finora_ui_tests PRIVATE ${FINORA_WARNINGS})
 target_compile_definitions(finora_ui_tests PRIVATE FINORA_VERSION="${PROJECT_VERSION}")
 add_test(NAME ui_tests COMMAND finora_ui_tests)

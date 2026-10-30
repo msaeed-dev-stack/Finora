@@ -5,11 +5,15 @@
 //  Every check prints PASS or FAIL. The program returns 0 only when all
 //  checks pass, so CTest (and build.bat) can report the result.
 // =====================================================================
+#include <climits>
 #include <iostream>
 #include <string>
+#include <vector>
 
+#include "core/Budget.h"
 #include "core/Greeting.h"
 #include "core/Money.h"
+#include "core/Totals.h"
 #include "core/Transaction.h"
 #include "core/TransactionFilter.h"
 
@@ -60,6 +64,21 @@ void checkText(TestCounter &counter, const std::string &testName,
         counter.checksFailed++;
         std::cout << "FAIL  " << testName << "   expected \"" << expected
                   << "\" but got \"" << actual << "\"\n";
+    }
+}
+
+// Compares an amount in minor units. Amounts need a long long, because
+// they can be far larger than the biggest int (about 2.1 x 10^9).
+void checkAmount(TestCounter &counter, const std::string &testName, long long actual, long long expected)
+{
+    counter.checksRun++;
+
+    if (actual == expected) {
+        std::cout << "PASS  " << testName << "\n";
+    } else {
+        counter.checksFailed++;
+        std::cout << "FAIL  " << testName << "   expected " << expected
+                  << " but got " << actual << "\n";
     }
 }
 
@@ -390,6 +409,213 @@ void testFilters(TestCounter &counter)
               containsIgnoringCase("Ali's shop", "bank"), false);
 }
 
+// =====================================================================
+//  Milestone 4: totals for the dashboard and budget rules
+// =====================================================================
+
+void testCheckedAddition(TestCounter &counter)
+{
+    long long total = 100;
+    checkBool(counter, "addChecked adds two normal amounts", addChecked(total, 250), true);
+    checkAmount(counter, "the total is now 350", total, 350);
+
+    long long nearlyFull = LLONG_MAX - 10;
+    checkBool(counter, "addChecked refuses an addition that would overflow", addChecked(nearlyFull, 11), false);
+    checkAmount(counter, "after a refused addition the total is unchanged", nearlyFull, LLONG_MAX - 10);
+    checkBool(counter, "addChecked allows an addition that exactly reaches the limit",
+              addChecked(nearlyFull, 10), true);
+
+    long long small = 5;
+    checkBool(counter, "addChecked refuses a negative amount", addChecked(small, -1), false);
+}
+
+void testMonths(TestCounter &counter)
+{
+    checkBool(counter, "2026-10 is a valid month", isValidMonth("2026-10"), true);
+    checkBool(counter, "2026-13 is not a valid month", isValidMonth("2026-13"), false);
+    checkBool(counter, "2026-1 (one digit) is not a valid month", isValidMonth("2026-1"), false);
+    checkBool(counter, "1899-12 is before the supported years", isValidMonth("1899-12"), false);
+    checkText(counter, "the month of 2026-10-28 is 2026-10", monthOfDate("2026-10-28"), "2026-10");
+    checkText(counter, "an impossible date has no month", monthOfDate("2026-02-30"), "");
+    checkText(counter, "one month before January 2026 is December 2025", shiftMonth("2026-01", -1), "2025-12");
+    checkText(counter, "12 months after 2026-10 is 2027-10", shiftMonth("2026-10", 12), "2027-10");
+    checkText(counter, "25 months before 2026-10 is 2024-09", shiftMonth("2026-10", -25), "2024-09");
+    checkText(counter, "going past the year 2100 gives no month", shiftMonth("2100-12", 1), "");
+}
+
+// Transactions used by several Milestone 4 tests.
+std::vector<Transaction> makeDashboardList()
+{
+    std::vector<Transaction> list;
+    list.push_back(makeTransaction(TYPE_INCOME, 12000000, "PKR", "Salary", "October salary", "2026-10-01"));
+    list.push_back(makeTransaction(TYPE_EXPENSE, 120050, "PKR", "Food", "Groceries", "2026-10-28"));
+    list.push_back(makeTransaction(TYPE_EXPENSE, 30000, "PKR", "food", "Lunch", "2026-10-05"));
+    list.push_back(makeTransaction(TYPE_EXPENSE, 8000, "PKR", "Transport", "Bus fare", "2026-10-07"));
+    list.push_back(makeTransaction(TYPE_EXPENSE, 500000, "PKR", "Rent", "September rent", "2026-09-30"));
+    list.push_back(makeTransaction(TYPE_INCOME, 50000, "USD", "Freelance", "Website", "2026-10-15"));
+    list.push_back(makeTransaction(TYPE_EXPENSE, 5000, "USD", "Food", "Dinner", "2026-10-16"));
+    list.push_back(makeTransaction(TYPE_EXPENSE, 450, "EUR", "Food", "Coffee", "2026-08-20"));
+    list.push_back(makeTransaction(TYPE_EXPENSE, 999, "GBP", "Food", "Not a supported currency", "2026-10-02"));
+    return list;
+}
+
+void testCurrencySummaries(TestCounter &counter)
+{
+    std::vector<CurrencySummary> summaries = summarizeByCurrency(makeDashboardList(), "2026-10");
+
+    checkInt(counter, "there is one summary per supported currency", static_cast<int>(summaries.size()), 3);
+    checkText(counter, "the summaries are in the order PKR, USD, EUR",
+              summaries[0].currencyCode + summaries[1].currencyCode + summaries[2].currencyCode, "PKRUSDEUR");
+    checkAmount(counter, "PKR income in October", summaries[0].monthIncomeMinor, 12000000);
+    checkAmount(counter, "PKR spending in October leaves out the September rent",
+                summaries[0].monthExpenseMinor, 158050);
+    checkAmount(counter, "PKR net in October", monthNetOf(summaries[0]), 11841950);
+    checkAmount(counter, "the PKR balance over all time includes September",
+                balanceOf(summaries[0]), 12000000 - 158050 - 500000);
+    checkAmount(counter, "USD is added up on its own, never mixed with PKR",
+                summaries[1].monthIncomeMinor + summaries[1].monthExpenseMinor, 55000);
+    checkAmount(counter, "EUR has no October spending", summaries[2].monthExpenseMinor, 0);
+    checkAmount(counter, "a balance can be negative", balanceOf(summaries[2]), -450);
+    checkInt(counter, "the GBP transaction is left out of every total",
+             summaries[0].transactionCount + summaries[1].transactionCount + summaries[2].transactionCount, 8);
+    checkBool(counter, "normal totals do not overflow",
+              summaries[0].overflow || summaries[1].overflow || summaries[2].overflow, false);
+
+    // Amounts this large are refused by validateTransaction, but the
+    // totals must still never wrap around to a wrong number.
+    std::vector<Transaction> huge;
+    huge.push_back(makeTransaction(TYPE_INCOME, LLONG_MAX / 2 + 1, "PKR", "Test", "", "2026-10-01"));
+    huge.push_back(makeTransaction(TYPE_INCOME, LLONG_MAX / 2 + 1, "PKR", "Test", "", "2026-10-02"));
+    std::vector<CurrencySummary> hugeSummaries = summarizeByCurrency(huge, "2026-10");
+    checkBool(counter, "a total that would overflow is marked instead of wrapping around",
+              hugeSummaries[0].overflow, true);
+    checkAmount(counter, "the overflowing amount is not added", hugeSummaries[0].totalIncomeMinor, LLONG_MAX / 2 + 1);
+}
+
+void testMonthlyFlow(TestCounter &counter)
+{
+    std::vector<Transaction> list = makeDashboardList();
+    std::vector<MonthFlow> flows = monthlyFlow(list, "PKR", "2026-10", 6);
+
+    checkInt(counter, "6 months of money flow are returned", static_cast<int>(flows.size()), 6);
+    checkText(counter, "the oldest month comes first", flows[0].month, "2026-05");
+    checkText(counter, "the chosen month comes last", flows[5].month, "2026-10");
+    checkAmount(counter, "October PKR income", flows[5].incomeMinor, 12000000);
+    checkAmount(counter, "September PKR spending", flows[4].expenseMinor, 500000);
+    checkAmount(counter, "a month without transactions is zero", flows[0].incomeMinor + flows[0].expenseMinor, 0);
+
+    std::vector<MonthFlow> dollars = monthlyFlow(list, "USD", "2026-10", 6);
+    checkAmount(counter, "the USD chart shows only USD", dollars[5].incomeMinor, 50000);
+
+    std::vector<MonthFlow> acrossNewYear = monthlyFlow(list, "PKR", "2026-02", 3);
+    checkText(counter, "the months cross into the previous year",
+              acrossNewYear[0].month + " " + acrossNewYear[1].month, "2025-12 2026-01");
+    checkInt(counter, "an invalid month gives no data",
+             static_cast<int>(monthlyFlow(list, "PKR", "2026-13", 6).size()), 0);
+}
+
+void testSpendingByCategory(TestCounter &counter)
+{
+    bool overflow = true;
+    std::vector<CategoryTotal> totals = spendingByCategory(makeDashboardList(), "PKR", "2026-10", overflow);
+
+    checkInt(counter, "October PKR spending has 2 categories", static_cast<int>(totals.size()), 2);
+    checkText(counter, "the largest category comes first", totals[0].category, "Food");
+    checkAmount(counter, "Food and food are counted as one category", totals[0].amountMinor, 150050);
+    checkAmount(counter, "Transport is second", totals[1].amountMinor, 8000);
+    checkBool(counter, "the overflow flag is cleared", overflow, false);
+}
+
+void testChartHelpers(TestCounter &counter)
+{
+    checkAmount(counter, "a largest value of 120,000.00 gives a scale up to 120,000.00",
+                chartScaleMaximum(12000000), 12000000);
+    checkAmount(counter, "87.00 gives a scale up to 100.00", chartScaleMaximum(8700), 10000);
+    checkAmount(counter, "1,234.56 gives a scale up to 1,600.00 (steps of 400)", chartScaleMaximum(123456), 160000);
+    checkAmount(counter, "no money at all gives the smallest scale, 4.00", chartScaleMaximum(0), 400);
+
+    checkText(counter, "120,000.00 is written 120k", formatCompactAmount(12000000), "120k");
+    checkText(counter, "1,250.00 is written 1.2k", formatCompactAmount(125000), "1.2k");
+    checkText(counter, "1,000.00 is written 1k", formatCompactAmount(100000), "1k");
+    checkText(counter, "45,000,000.00 is written 45M", formatCompactAmount(4500000000LL), "45M");
+    checkText(counter, "850.00 is written 850", formatCompactAmount(85000), "850");
+    checkText(counter, "a negative amount keeps its sign", formatCompactAmount(-250000), "-2.5k");
+}
+
+void testBudgetRules(TestCounter &counter)
+{
+    // The status at the edge of every range.
+    checkBool(counter, "7,999 of 10,000 (79.99%) is on track",
+              budgetStatusFor(7999, 10000) == BUDGET_ON_TRACK, true);
+    checkBool(counter, "8,000 of 10,000 (exactly 80%) is a warning",
+              budgetStatusFor(8000, 10000) == BUDGET_WARNING, true);
+    checkBool(counter, "9,999 of 10,000 is still a warning", budgetStatusFor(9999, 10000) == BUDGET_WARNING, true);
+    checkBool(counter, "10,000 of 10,000 is limit reached", budgetStatusFor(10000, 10000) == BUDGET_REACHED, true);
+    checkBool(counter, "10,001 of 10,000 is over budget", budgetStatusFor(10001, 10000) == BUDGET_OVER, true);
+    checkBool(counter, "the 80% rule is exact without rounding: 4 of 5 is a warning",
+              budgetStatusFor(4, 5) == BUDGET_WARNING, true);
+    checkBool(counter, "and 3 of 4 (75%) is on track", budgetStatusFor(3, 4) == BUDGET_ON_TRACK, true);
+    checkBool(counter, "nothing spent is on track", budgetStatusFor(0, 10000) == BUDGET_ON_TRACK, true);
+
+    checkInt(counter, "79.99% is shown as 79%", percentUsed(7999, 10000), 79);
+    checkInt(counter, "exactly 80% is shown as 80%", percentUsed(8000, 10000), 80);
+    checkInt(counter, "250% is shown as 250%", percentUsed(25000, 10000), 250);
+    checkInt(counter, "an enormous amount is capped at 999% instead of overflowing",
+             percentUsed(LLONG_MAX, 10000), 999);
+    checkInt(counter, "nothing spent is 0%", percentUsed(0, 10000), 0);
+
+    checkText(counter, "status words: on track", budgetStatusName(BUDGET_ON_TRACK), "On track");
+    checkText(counter, "status words: warning", budgetStatusName(BUDGET_WARNING), "Nearing limit");
+    checkText(counter, "status words: reached", budgetStatusName(BUDGET_REACHED), "Limit reached");
+    checkText(counter, "status words: over", budgetStatusName(BUDGET_OVER), "Over budget");
+
+    Budget budget;
+    budget.category = "Food";
+    budget.currencyCode = "PKR";
+    budget.limitMinor = 200000;   // PKR 2,000.00
+    checkText(counter, "a complete budget is valid", validateBudget(budget), "");
+    Budget broken = budget;
+    broken.category = "  ";
+    checkText(counter, "a budget needs a category", validateBudget(broken), "Please choose a category.");
+    broken = budget;
+    broken.currencyCode = "GBP";
+    checkText(counter, "a budget needs a supported currency", validateBudget(broken), "Please choose PKR, USD or EUR.");
+    broken = budget;
+    broken.limitMinor = 0;
+    checkText(counter, "a limit of 0 is refused", validateBudget(broken), "The monthly limit must be greater than zero.");
+    broken.limitMinor = MAX_AMOUNT_MINOR + 1;
+    checkText(counter, "a limit above the maximum is refused", validateBudget(broken), "The monthly limit is too large.");
+
+    // Only October PKR expenses of Food (in any case) count: 1,200.50 + 300.00.
+    std::vector<Transaction> list = makeDashboardList();
+    BudgetProgress progress = budgetProgressFor(budget, list, "2026-10");
+    checkAmount(counter, "only Food expenses in PKR in October are counted", progress.spentMinor, 150050);
+    checkAmount(counter, "the remaining amount is the limit minus the spending", progress.remainingMinor, 49950);
+    checkInt(counter, "75% of the budget is used", progress.percentUsed, 75);
+    checkBool(counter, "75% is on track", progress.status == BUDGET_ON_TRACK, true);
+
+    budget.limitMinor = 150050;
+    progress = budgetProgressFor(budget, list, "2026-10");
+    checkBool(counter, "spending exactly the limit is limit reached, with 0 left",
+              progress.status == BUDGET_REACHED && progress.remainingMinor == 0, true);
+
+    budget.limitMinor = 100000;
+    progress = budgetProgressFor(budget, list, "2026-10");
+    checkBool(counter, "spending more than the limit is over budget", progress.status == BUDGET_OVER, true);
+    checkAmount(counter, "the remaining amount is negative when over budget", progress.remainingMinor, -50050);
+
+    progress = budgetProgressFor(budget, list, "2026-09");
+    checkAmount(counter, "a new month starts again from zero", progress.spentMinor, 0);
+
+    std::vector<Budget> budgets;
+    budgets.push_back(budget);
+    budget.currencyCode = "USD";
+    budgets.push_back(budget);
+    std::vector<BudgetProgress> all = allBudgetProgress(budgets, list, "2026-10");
+    checkBool(counter, "allBudgetProgress keeps the order: PKR first, then USD (50.00 spent)",
+              all.size() == 2 && all[0].spentMinor == 150050 && all[1].spentMinor == 5000, true);
+}
+
 int main()
 {
     TestCounter counter;
@@ -405,6 +631,15 @@ int main()
     testParseAmount(counter);
     testFormatAmount(counter);
     testFilters(counter);
+
+    std::cout << "---- Milestone 4: totals and budgets ----\n";
+    testCheckedAddition(counter);
+    testMonths(counter);
+    testCurrencySummaries(counter);
+    testMonthlyFlow(counter);
+    testSpendingByCategory(counter);
+    testChartHelpers(counter);
+    testBudgetRules(counter);
 
     std::cout << "-----------------\n";
     std::cout << counter.checksRun << " checks, " << counter.checksFailed << " failed\n";

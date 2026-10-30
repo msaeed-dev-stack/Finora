@@ -4,7 +4,7 @@
 
 Finora is a desktop personal finance and budget management application for Windows. It is written in C++17 with Qt 6 Widgets and SQLite, and is being built as a Programming Fundamentals semester project.
 
-> **Current status: Milestone 3 of 7.** The main window, the SQLite database, the single-copy guard and the **Transactions page** work: you can add, edit, delete, search and filter income and expenses, and they are kept after closing Finora. The other finance pages are planned and are **not yet implemented**; each says which milestone will add it.
+> **Current status: Milestone 4, Phase 4A.** The Transactions page from Milestone 3, plus a **dashboard**, **monthly budgets**, a **light and a dark theme** and a **safe database upgrade** to schema version 2. Sign-in and accounts (Phase 4B) and subscription plans (Phase 4C) are **planned and not yet implemented**. Pages that are not built yet say so and carry a "Soon" badge.
 
 ## Student details
 
@@ -49,8 +49,15 @@ Finora is an offline desktop program that records income and expenses, compares 
 | Transactions page: list, add, edit, delete with confirmation | Done in Milestone 3 |
 | Search by description or category; filter by type, currency, category and period | Done in Milestone 3 |
 | Typed amounts such as 1,200.50 or 1,20,000 read exactly, with a "Will be saved as" preview | Done in Milestone 3 |
-| Automated core, interface and database tests | Done in Milestones 1 to 3 |
-| Dashboard summaries, monthly category budgets and alerts | Planned: Milestone 4 |
+| Automated core, interface and database tests | Done in Milestones 1 to 4A |
+| Finora design system: violet brand, light and dark theme, Inter and Manrope fonts, recoloured icons | Done in Milestone 4, Phase 4A |
+| Dashboard: one wallet card per currency (balance, this month's income and spending), money-flow chart, budget alerts, recent transactions, spending by category | Done in Phase 4A |
+| Totals per currency with checked addition; currencies are never added together | Done in Phase 4A |
+| Budgets: create, edit and delete a monthly limit per category and currency; spent, left, progress ring; "Nearing limit" at 80%, "Limit reached" at 100%, "Over budget" above it | Done in Phase 4A |
+| Database schema version 2 with a verified backup before the upgrade, one transaction, row and amount checks, foreign key check and rollback on failure | Done in Phase 4A |
+| Settings: theme, reduce motion, data location, font licences | Done in Phase 4A |
+| Sign-up, sign-in, recovery codes, profiles, one person's data per account | Planned: Milestone 4, Phase 4B |
+| Free, Plus, Pro and Business plans with a simulated checkout | Planned: Milestone 4, Phase 4C |
 | Savings goals; PKR, USD and EUR with manual exchange rates | Planned: Milestone 5 |
 | Reports and CSV export | Planned: Milestone 6 |
 | Final testing, documentation and Windows package | Planned: Milestone 7 |
@@ -105,6 +112,7 @@ C:\Users\<your user name>\AppData\Local\Finora\finora.db
 To open that folder, press **Win + R**, type `%LOCALAPPDATA%\Finora` and press Enter.
 
 - **First start:** Finora creates the folder, the file and its tables automatically.
+- **Upgrading from Milestone 2 or 3:** a file with schema version 1 is upgraded to version 2 only after you click **Upgrade and continue**. Finora first saves a complete copy in `%LOCALAPPDATA%\Finora\backups\` (for example `finora-v1-backup-2026-10-30_15-04-59.db`) and checks it. If any step of the upgrade fails, every change is rolled back and the file stays exactly as it was. **Quit without changes** closes Finora and changes nothing.
 - **Back up:** close Finora, then copy `finora.db` to a safe place such as a USB drive.
 - **Restore:** close Finora, then copy your backup over `finora.db`.
 - **Start with an empty database:** close Finora and delete `finora.db`. A new, empty one is created at the next start. This permanently deletes all records.
@@ -120,9 +128,11 @@ Database design, schema and versioning are explained in [docs/DESIGN.md](docs/DE
 
 | Test program | What it checks | Last result, 30 Oct 2026, Windows |
 |---|---|---|
-| `finora_tests` | Greeting, leap years, days per month, real calendar dates, currencies, transaction validation, reading and formatting amounts, search and filters | 115 of 115 checks pass |
-| `finora_ui_tests` | The real main window and sidebar; the Transactions page on a real database: add through the form, cancel, search, every filter, edit, delete with Yes and No, a database error, and the data after a restart; the form's validation | 76 of 76 checks pass |
-| `finora_db_tests` | Real SQLite files: creating and reopening, saving, reading, updating, deleting, punctuation and Urdu text, invalid data, error messages, open failures, data kept after closing, SQLite's own rules, ids never reused, only one running copy | 93 of 93 checks pass |
+| `finora_tests` | Greeting, leap years, days per month, real calendar dates, currencies, transaction validation, reading and formatting amounts, search and filters; checked addition, months, totals per currency, money flow, spending per category, chart scale, every edge of the budget rules | 199 of 199 checks pass |
+| `finora_ui_tests` | The real main window and sidebar; the Transactions page on a real database; the form's validation; the dashboard's wallet cards, chart (including the arrow keys) and alerts; budgets created, refused, edited and deleted through the real forms; theme switching, reduce motion, and the saved theme after a restart | 131 of 131 checks pass |
+| `finora_db_tests` | Real SQLite files: creating and reopening, saving, reading, updating, deleting, punctuation and Urdu text, invalid data, error messages, open failures, data kept after closing, SQLite's own rules, ids never reused, only one running copy; the upgrade from version 1 with its checked backup, two deliberate upgrade failures that leave the file byte-for-byte unchanged, settings, budgets, timestamps | 157 of 157 checks pass |
+
+`finora_ui_tests --screenshots <folder>` also saves a picture of every page in both themes and of the forms.
 
 Run a test program directly to see every check:
 
@@ -142,22 +152,34 @@ Finora/
 │   ├── core/                  Plain C++ logic without Qt, tested directly
 │   │   ├── Greeting.h/.cpp        Time-of-day greeting
 │   │   ├── Transaction.h/.cpp     Transaction record, currencies, categories, validation, dates
-│   │   ├── Money.h/.cpp           Reading typed amounts; writing 1,200.50
-│   │   └── TransactionFilter.h/.cpp  Search and filters
+│   │   ├── Money.h/.cpp           Reading typed amounts; writing 1,200.50 and +PKR 1,200.50
+│   │   ├── TransactionFilter.h/.cpp  Search and filters
+│   │   ├── Totals.h/.cpp          Checked totals per currency, money flow per month, spending per category
+│   │   └── Budget.h/.cpp          Budget record, 80% / 100% / over rules, progress
 │   ├── database/              All SQL lives here
-│   │   ├── DatabaseManager.h/.cpp Open SQLite, create tables, load, save, update, delete
+│   │   ├── DatabaseManager.h/.cpp Open SQLite, create and upgrade tables, backup, transactions, settings
+│   │   ├── BudgetStore.h/.cpp     Save, load, change and delete budgets
 │   │   └── InstanceLock.h/.cpp    Let only one copy of Finora run at a time
 │   └── ui/                    Qt Widgets user interface
-│       ├── MainWindow.h/.cpp      Window: sidebar and page area
-│       ├── Sidebar.h/.cpp         Logo and navigation buttons
+│       ├── MainWindow.h/.cpp      Window: sidebar, pages, theme switching
+│       ├── Page.h                 Base class of every page (virtual refresh())
+│       ├── Sidebar.h/.cpp         Logo, navigation buttons, theme button
 │       ├── PageHeader.h/.cpp      Title and subtitle used on every page
 │       ├── PlaceholderPage.h/.cpp "Coming in Milestone N" page
+│       ├── DashboardPage.h/.cpp   The dashboard
 │       ├── TransactionsPage.h/.cpp   The Transactions page
 │       ├── TransactionDialog.h/.cpp  The Add / Edit Transaction form
-│       └── Theme.h/.cpp           Style, font and style sheet
+│       ├── BudgetsPage.h/.cpp     The Budgets page
+│       ├── BudgetDialog.h/.cpp    The New / Edit Budget form
+│       ├── SettingsPage.h/.cpp    Appearance, data location, licences
+│       ├── Theme.h/.cpp           Colour tokens of both themes, fonts, style sheet, icons
+│       ├── UiHelpers.h/.cpp       Month names, money text, chips
+│       └── components/            Reusable pieces: WalletCard, MoneyFlowChart,
+│                                  ProgressRing, MonthSwitcher, Toast
 ├── resources/
-│   ├── icons/                 Hand-drawn SVG icons, grey and white versions
-│   └── styles/light.qss       Colours, spacing and rounded corners
+│   ├── icons/                 Hand-drawn SVG icons, recoloured for each theme
+│   ├── fonts/                 Inter and Manrope with their licence files (OFL 1.1)
+│   └── styles/finora.qss      One style sheet for both themes, with {{colour}} names
 ├── tests/
 │   ├── finora_tests.cpp       Core logic tests
 │   ├── finora_ui_tests.cpp    Interface tests
@@ -172,16 +194,19 @@ Finora/
 - [C++ concepts map](docs/CPP_CONCEPTS_MAP.md)
 - [Viva preparation](docs/VIVA_PREPARATION.md)
 - [Milestone 3 demonstration guide](docs/DEMO_MILESTONE3.md)
+- [Milestone 4 demonstration guide](docs/DEMO_MILESTONE4.md)
+- [Third-party notices: fonts, Qt, SQLite](THIRD_PARTY_NOTICES.md)
 
-## Known limitations at Milestone 3
+## Known limitations at Milestone 4, Phase 4A
 
-- The Transactions page shows no totals yet. Totals per currency, with checked addition, come with the dashboard in Milestone 4.
+- There are no accounts yet. Everything belongs to "this computer"; the account tables exist in schema version 2 but the sign-in screens come in Phase 4B. Existing records will be moved into an account only if the user confirms it.
+- Different currencies are never added together, so there is no single "total balance" across PKR, USD and EUR. That needs exchange rates (Milestone 5).
 - Search and filters work on the list already loaded into memory. That is fast for one person's records; very large data sets would need filtering in SQL.
-- Search ignores upper and lower case only for the English letters A to Z.
-- The table is always sorted newest first; clicking a column header does not re-sort it.
-- Categories are free text with suggestions, so "Food" and "food" count as two categories.
-- Budgets, savings goals and exchange rates have no tables yet. Budgets arrive in Milestone 4 as schema version 2.
-- Light theme only.
+- Search, and matching a budget to its category, ignore upper and lower case only for the English letters A to Z.
+- The Transactions table is always sorted newest first; clicking a column header does not re-sort it.
+- On the Transactions page, "Food" and "food" are still listed as two categories in the filter. Budgets and the dashboard treat them as one.
+- A budget is the same limit every month; there are no different limits for different months yet.
+- Savings goals, reports and exchange rates are not built yet; their pages say "Coming in Milestone N".
 - The build paths assume Qt is installed in `C:\Qt`.
-- The greeting is chosen when the window opens and does not change while the window stays open.
+- The greeting is chosen each time the dashboard is shown; it does not change while you stay on the dashboard.
 - Only one copy of Finora can run at a time, because SQLite lets only one program write to the database at once. A second copy says Finora is already open and closes. This is checked per Windows user account; two different Windows users have separate data folders and separate databases. Details are in [docs/DESIGN.md](docs/DESIGN.md), section 7.9.

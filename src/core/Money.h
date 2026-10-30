@@ -27,4 +27,9 @@ std::string formatAmount(long long amountMinor);
 // Puts the currency code in front: ("PKR", 120050) gives "PKR 1,200.50".
 std::string formatMoney(const std::string &currencyCode, long long amountMinor);
 
+// Like formatMoney, but with the sign in front of the currency, for a
+// change of money: 120050 gives "+PKR 1,200.50", -120050 gives
+// "-PKR 1,200.50" and 0 gives "PKR 0.00".
+std::string formatSignedMoney(const std::string &currencyCode, long long amountMinor);
+
 #endif // FINORA_MONEY_H

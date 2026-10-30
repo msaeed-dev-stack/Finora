@@ -3,12 +3,14 @@
 //  Finora - Desktop Personal Finance & Budget Management System
 //
 //  The program starts here. main() creates the Qt application, gives it
-//  Finora's look, opens the database, shows the main window and then
-//  waits for the user.
+//  Finora's look, opens (and if needed upgrades) the database, shows the
+//  main window and then waits for the user.
 // =====================================================================
 #include <QApplication>
 #include <QDir>
+#include <QFileInfo>
 #include <QMessageBox>
+#include <QPushButton>
 
 #include "database/DatabaseManager.h"
 #include "database/InstanceLock.h"
@@ -42,6 +44,30 @@ void showAlreadyRunning()
                              "records are always saved safely.");
 }
 
+// Asks before a database from an older Finora is upgraded. The user
+// decides; "Quit" closes Finora and leaves the file exactly as it is.
+bool askToUpgrade(const QString &databasePath, int storedVersion)
+{
+    QString backupFolder = QDir::toNativeSeparators(QFileInfo(databasePath).absolutePath() + "/backups");
+
+    QMessageBox box;
+    box.setIcon(QMessageBox::Question);
+    box.setWindowTitle("Upgrade Finora's data file");
+    box.setText("This version of Finora stores your records in a new layout.");
+    box.setInformativeText(
+        "Your data file uses layout " + QString::number(storedVersion) + ". Finora will upgrade it to layout "
+        + QString::number(CURRENT_SCHEMA_VERSION) + ", which adds budgets and prepares user accounts. "
+        "Every record is kept.\n\n"
+        "Before anything changes, a complete backup copy is saved in:\n" + backupFolder + "\n\n"
+        "If any step fails, the upgrade is undone and your file stays exactly as it is.");
+    QPushButton *upgradeButton = box.addButton("Upgrade and continue", QMessageBox::AcceptRole);
+    box.addButton("Quit without changes", QMessageBox::RejectRole);
+    box.setDefaultButton(upgradeButton);
+    box.exec();
+
+    return box.clickedButton() == upgradeButton;
+}
+
 int main(int argc, char *argv[])
 {
     // QApplication runs the whole graphical program: it receives mouse
@@ -50,9 +76,11 @@ int main(int argc, char *argv[])
     app.setApplicationName("Finora");
     app.setApplicationVersion(FINORA_VERSION);   // the number comes from CMakeLists.txt
 
-    // Style, font and colours. If the style sheet were missing, Finora
-    // would still run, just with Qt's plain default look.
-    applyLightTheme(app);
+    // Fonts, style and colours. If the style sheet were missing, Finora
+    // would still run, just with Qt's plain default look. The saved theme
+    // (light or dark) is applied by MainWindow once the database is open.
+    loadBundledFonts();
+    applyTheme(app, THEME_LIGHT);
 
     QString databasePath = DatabaseManager::defaultDatabasePath();
 
@@ -68,6 +96,14 @@ int main(int argc, char *argv[])
             showDatabaseError(databasePath, instanceLock.lastError());
         }
         return 1;
+    }
+
+    // A file from an older Finora is upgraded only if the user agrees.
+    int storedVersion = DatabaseManager::storedSchemaVersion(databasePath);
+    if (storedVersion >= 1 && storedVersion < CURRENT_SCHEMA_VERSION) {
+        if (!askToUpgrade(databasePath, storedVersion)) {
+            return 0;   // nothing was changed
+        }
     }
 
     // Open the database before any page is shown. `database` is declared

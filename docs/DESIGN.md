@@ -2,7 +2,7 @@
 
 This document explains how Finora is organised and how its algorithms work. It describes only what exists in the code. Anything not built yet is marked **Planned — Not Yet Implemented**.
 
-Last updated: Milestone 3, 30 October 2026.
+Last updated: Milestone 4, Phase 4A, 30 October 2026.
 
 ## 1. Architecture
 
@@ -10,9 +10,9 @@ Finora is split into layers. Each layer has one job.
 
 | Layer | Folder | Job | Uses Qt? | Status |
 |---|---|---|---|---|
-| Core logic | `src/core` | Rules in plain C++: greeting, transaction validation, dates, currencies, reading and writing amounts, search and filters | No | Done for Milestones 1 to 3 |
-| Database | `src/database` | Open the SQLite file, create tables; load, save, update and delete transactions; the single-copy lock | Yes, Qt SQL | Done for Milestones 2 and 3 |
-| User interface | `src/ui` | Window, sidebar, theme, the Transactions page and its form | Yes, Qt Widgets | Navigation and Transactions page done |
+| Core logic | `src/core` | Rules in plain C++: greeting, transaction validation, dates, currencies, reading and writing amounts, search and filters, checked totals per currency, budget rules | No | Done for Milestones 1 to 4A |
+| Database | `src/database` | Open the SQLite file, create and safely upgrade tables, backups; transactions, settings and budgets; the single-copy lock | Yes, Qt SQL | Done for Milestones 2 to 4A |
+| User interface | `src/ui` | Window, sidebar, light and dark theme, Dashboard, Transactions, Budgets and Settings pages, forms, reusable components | Yes, Qt Widgets and Qt Svg | Done for Milestones 1 to 4A |
 | Tests | `tests` | Check the core, the window and the database automatically | Core tests no; the others yes | 3 test programs |
 
 ```mermaid
@@ -36,15 +36,19 @@ flowchart LR
 ```mermaid
 flowchart TD
     A([Start Finora.exe]) --> B["main creates QApplication"]
-    B --> C["applyLightTheme: Fusion style, light colours, Segoe UI font"]
+    B --> C["loadBundledFonts, then applyTheme light: Fusion style, palette, Inter font, finora.qss"]
     C --> D["DatabaseManager database; path = defaultDatabasePath"]
     D --> L{"instanceLock.tryLock succeeded?"}
     L -- "No, another copy runs" --> M["Finora is already open"]
     M --> G([Exit with code 1])
-    L -- Yes --> E{"database.open path succeeded?"}
+    L -- Yes --> V{"storedSchemaVersion is 1, older than 2?"}
+    V -- Yes --> Q{"User clicks Upgrade and continue?"}
+    Q -- "No: Quit without changes" --> Z([Exit with code 0, file untouched])
+    Q -- Yes --> E
+    V -- No --> E{"database.open path succeeded? It backs up and upgrades if needed"}
     E -- No --> F["Error dialog with the file path and the reason"]
     F --> G
-    E -- Yes --> H["Create MainWindow database: sidebar and 7 pages; the Transactions page loads its rows"]
+    E -- Yes --> H["Create MainWindow database: applies the saved theme, builds the sidebar and 7 pages, shows the dashboard"]
     H --> I["app.exec: wait for user actions"]
     I --> J["Window closed: window destroyed, then database closed"]
     J --> K([Exit with code 0])
@@ -54,10 +58,16 @@ Pseudocode for `main()` in `src/main.cpp`:
 
 ```text
 CREATE the Qt application and set its name and version
-CALL applyLightTheme(application)
+CALL loadBundledFonts() and applyTheme(application, THEME_LIGHT)
 path = DatabaseManager::defaultDatabasePath()
 IF NOT instanceLock.tryLock() THEN         // finora.lock next to finora.db
     SHOW "already open" or the error, RETURN 1
+END IF
+version = DatabaseManager::storedSchemaVersion(path)   // read-only peek
+IF version is 1 (older than CURRENT_SCHEMA_VERSION) THEN
+    IF the user does NOT click "Upgrade and continue" THEN
+        RETURN 0                     // nothing was changed
+    END IF
 END IF
 CREATE a DatabaseManager called database
 IF NOT database.open(path) THEN
@@ -202,7 +212,7 @@ The file is not in the program folder, because programs installed under `C:\Prog
 | `description` | `TEXT NOT NULL DEFAULT ''` | Optional note |
 | `transaction_date` | `TEXT NOT NULL`, must be a real date | ISO format `YYYY-MM-DD`, which sorts correctly as text and is understood by SQLite's date functions |
 
-**Budgets** are not in version 1. They will be added in Milestone 4 as schema version 2. **Planned — Not Yet Implemented.**
+**Budgets** are not in version 1. They are added by schema version 2, described in section 10.2.
 
 ### 7.3 Two lines of defence
 
@@ -211,15 +221,16 @@ The file is not in the program folder, because programs installed under `C:\Prog
 
 ### 7.4 Schema versioning
 
-SQLite keeps a whole number called `user_version` inside every database file, for the program's own use. Finora uses it as the schema version. The constant `CURRENT_SCHEMA_VERSION` in `DatabaseManager.h` is 1.
+SQLite keeps a whole number called `user_version` inside every database file, for the program's own use. Finora uses it as the schema version. The constant `CURRENT_SCHEMA_VERSION` in `DatabaseManager.h` is 2 since Phase 4A.
 
 | `user_version` in the file | Meaning | What `upgradeSchema()` does |
 |---|---|---|
-| 0 | New, empty file | Creates the version 1 tables and currencies, then sets `user_version = 1`, all inside one database transaction |
-| 1 | Up to date | Nothing |
-| 2 or more | Made by a newer Finora | Refuses to open and leaves the file unchanged |
+| 0 | New, empty file | Creates the version 1 tables and currencies, then upgrades them to version 2, all inside one database transaction. No backup is needed: there are no records yet |
+| 1 | A file from Milestone 2 or 3 | Saves and checks a backup, then upgrades to version 2 inside one transaction (section 10.3) |
+| 2 | Up to date | Nothing |
+| 3 or more | Made by a newer Finora | Refuses to open and leaves the file unchanged |
 
-Inside the transaction, either every step is saved by `commit()`, or `rollback()` undoes all of them, so a half-created database cannot exist. The statements also use `CREATE TABLE IF NOT EXISTS` and `INSERT OR IGNORE`, so repeating them can never create duplicates. In Milestone 4, version 2 will add one more step: "if the version is below 2, create the budgets table".
+Inside the transaction, either every step is saved by `commit()`, or `rollback()` undoes all of them, so a half-created database cannot exist. The statements also use `CREATE TABLE IF NOT EXISTS` and `INSERT OR IGNORE`, so repeating them can never create duplicates. Phase 4A added the next step, "if the version is below 2, upgrade to version 2", described in section 10.3.
 
 ### 7.5 Opening the database
 
@@ -456,4 +467,264 @@ After every add, edit or delete, the page reloads all rows from SQLite instead o
 
 - **Edit and Delete act on the selected row.** One Edit and one Delete button are simpler to build and explain than a pair of buttons inside every row. Double-clicking a row also opens it for editing.
 - **The form validates before closing.** The page only ever receives a valid transaction, and `DatabaseManager` checks again, so data is protected even if code calls it directly.
-- **No schema change.** The Milestone 2 tables already had every column the page needs, so the database stays at schema version 1.
+- **No schema change in Milestone 3.** The Milestone 2 tables already had every column the page needs, so Milestone 3 kept schema version 1. Version 2 came with budgets in Phase 4A.
+
+## 10. Milestone 4, Phase 4A: design system, schema version 2, dashboard and budgets
+
+### 10.1 Who does what
+
+| Part | Layer | Job |
+|---|---|---|
+| `Totals.h/.cpp` | core | Checked addition; totals per currency; money flow per month; spending per category; the chart scale |
+| `Budget.h/.cpp` | core | The `Budget` structure, the `BudgetStatus` enum and the 80% / 100% / over rules |
+| `DatabaseManager` | database | New: `storedSchemaVersion`, the backup, `upgradeToVersion2`, settings, the audit history |
+| `BudgetStore` | database | All budget SQL: add, load, update, delete, refuse duplicates |
+| `Page` | ui | Base class of every page, with the virtual function `refresh()` |
+| `DashboardPage`, `BudgetsPage`, `SettingsPage` | ui | The three new pages |
+| `BudgetDialog` | ui | The New / Edit Budget form |
+| `WalletCard`, `MoneyFlowChart`, `ProgressRing`, `MonthSwitcher`, `Toast` | ui/components | Reusable pieces used by several pages |
+| `Theme` | ui | Colour tokens of both themes, fonts, the style sheet template, coloured icons, reduce motion |
+
+The rule from section 1 still holds: the pages contain no SQL and no money arithmetic. They call `BudgetStore` and `DatabaseManager` for data, and `Totals` and `Budget` for every number they show.
+
+### 10.2 Schema version 2
+
+```mermaid
+erDiagram
+    currencies ||--o{ transactions : "currency_code"
+    currencies ||--o{ budgets : "currency_code"
+    users ||--o{ transactions : "user_id, NULL = no account yet"
+    users ||--o{ budgets : "user_id"
+    users ||--o{ user_settings : "user_id"
+    users ||--o{ recovery_codes : "user_id"
+    users ||--o{ login_sessions : "user_id"
+    users ||--o{ audit_events : "user_id"
+```
+
+| Table | New or changed | Purpose |
+|---|---|---|
+| `transactions` | Rebuilt | Same columns as version 1, plus `user_id` (the owner; NULL for records made before accounts existed), `uuid` (32 random hex digits, the same on every computer, for a future cloud sync), `created_at` and `updated_at` (UTC). Index `transactions_by_owner_and_date` on `(user_id, transaction_date)` |
+| `budgets` | New | `category`, `currency_code`, `limit_minor` (1 to 999,999,999,999), `user_id`, times. A UNIQUE index on `(ifnull(user_id, 0), lower(category), currency_code)` allows one budget per category and currency |
+| `app_settings` | New | Key and value, for this Finora installation: `theme` (`light` or `dark`) and `reduced_motion` (`0` or `1`) |
+| `users` | New, used from Phase 4B | Email (unique, case-insensitive), display name, `password_hash` (a one-way Argon2id hash that contains its own salt and settings), failed sign-in count, `locked_until`, times |
+| `user_settings` | New, used from Phase 4B | Key and value per user |
+| `recovery_codes` | New, used from Phase 4B | `code_hash` only, never the code itself; `used_at` makes each code single-use |
+| `login_sessions` | New, used from Phase 4B | Start, last activity, expiry and end of each sign-in |
+| `audit_events` | New | A history of important events. Phase 4A writes `database_upgraded` with the name of the backup |
+
+**Why the account tables already exist.** The rebuilt `transactions` table refers to `users`, and a foreign key needs its table. Creating every Milestone 4 table in one upgrade means the user's records are copied once, not twice. The sign-in screens that use these tables are Phase 4B. **Planned — Not Yet Implemented.**
+
+**Records without an owner.** After the upgrade, every existing transaction has `user_id = NULL`. Phase 4B will ask the first person who signs up whether these records should move into their account; Finora never moves them silently.
+
+### 10.3 The safe upgrade from version 1 to version 2
+
+```mermaid
+flowchart TD
+    A["main: storedSchemaVersion opens the file READ-ONLY"] --> B{"Version 1?"}
+    B -- No --> O["open as usual"]
+    B -- Yes --> C{"User clicks Upgrade and continue?"}
+    C -- No --> X([Quit; the file is not touched])
+    C -- Yes --> D["VACUUM INTO backups/finora-v1-backup-DATE.db"]
+    D --> E{"Backup passes integrity_check, has version 1 and every transaction?"}
+    E -- No --> F([Stop: error dialog; database not changed])
+    E -- Yes --> G["BEGIN: one database transaction"]
+    G --> H["Create the new tables; copy transactions into transactions_v2"]
+    H --> I{"Same number of rows and same total amount?"}
+    I -- No --> R["ROLLBACK"]
+    I -- Yes --> J["Drop the old table, rename the new one, keep the highest id, add the index, create budgets"]
+    J --> K{"PRAGMA foreign_key_check finds nothing?"}
+    K -- No --> R
+    K -- Yes --> L["Write the audit event; user_version = 2; COMMIT"]
+    R --> M([Error dialog: nothing was changed, and where the backup is])
+    L --> O
+```
+
+Pseudocode of `upgradeSchema()` in `src/database/DatabaseManager.cpp`:
+
+```text
+version = PRAGMA user_version
+IF version > 2 THEN refuse ("made by a newer Finora")
+IF version == 2 THEN RETURN true
+IF version >= 1 THEN                         // the file holds the user's records
+    IF NOT backupBeforeUpgrade(version) THEN RETURN false   // nothing changed yet
+BEGIN TRANSACTION
+ok = true
+IF version < 1 THEN ok = createVersion1Tables()
+IF ok AND version < 2 THEN ok = upgradeToVersion2()
+IF ok THEN ok = checkForeignKeys()
+IF ok AND version >= 1 THEN ok = recordAuditEvent("database_upgraded", backup file name)
+IF ok THEN ok = run "PRAGMA user_version = 2"
+IF NOT ok THEN ROLLBACK, RETURN false        // the message says where the backup is
+COMMIT
+```
+
+Four details make the upgrade safe:
+
+1. **Backup first, outside the transaction.** `VACUUM INTO` writes a complete, consistent copy. A second, read-only connection then checks it. The upgrade starts only if the copy is good.
+2. **One transaction.** Creating, copying, dropping and renaming all happen between `BEGIN` and `COMMIT`. SQLite's rollback journal restores every page on `ROLLBACK`, so a failed upgrade leaves the file byte-for-byte as it was. The tests compare the bytes.
+3. **Prove the copy.** The number of rows and the sum of `amount_minor` are read before and after copying. Any difference stops the upgrade.
+4. **Ids are never reused.** `AUTOINCREMENT` promises that an id is never given out twice, even after a delete. The highest id ever used is read from `sqlite_sequence` before the copy and written back after the rename.
+
+How it is tested in `finora_db_tests`:
+
+| Test | Result |
+|---|---|
+| A real version 1 file with 3 transactions and one deleted id | Upgraded: same ids and values, 3 different `uuid`s, `user_id` NULL, the next new id is 5 (not the deleted 4), integrity "ok", no broken foreign keys, one audit event, and a version 1 backup with 3 transactions |
+| Deliberate failure 1: a transaction pointing to currency `GBP` | Fails while copying; the file is byte-for-byte unchanged and still version 1; the backup is kept |
+| Deliberate failure 2: a table named `budgets` already exists | Fails after the rebuild; rollback restores the original table; the file is byte-for-byte unchanged |
+| A version 1 file in which every transaction was deleted | Upgraded; the next new id is still 5, because the highest id ever used is written back even when no row was copied |
+| A brand-new file | Created directly at version 2; no backup is needed |
+
+### 10.4 Checked totals and "never mix currencies"
+
+`addChecked(total, amount)` in `src/core/Totals.cpp`:
+
+```text
+IF total < 0 OR amount < 0 THEN RETURN false
+IF amount > LLONG_MAX - total THEN RETURN false     // total + amount would overflow
+total = total + amount
+RETURN true
+```
+
+`summarizeByCurrency(transactions, month)`:
+
+```text
+summaries = one empty summary for PKR, USD and EUR (from SUPPORTED_CURRENCIES)
+FOR each transaction
+    find the summary with the SAME currency code; if none, SKIP it   // never added to another currency
+    count it
+    IF income THEN addChecked(total income); IF in the month THEN addChecked(month income)
+    ELSE           addChecked(total expense); IF in the month THEN addChecked(month expense)
+    IF any addition failed THEN mark the summary as overflow
+balance = total income - total expense     // both 0 or more, so this cannot overflow
+```
+
+A wallet card that is marked as overflow shows "Too large to show" instead of a wrong number. One transaction can be at most 9,999,999,999.99, so a real overflow needs millions of the largest possible transactions; the tests force it with two huge amounts.
+
+### 10.5 Budget rules
+
+`budgetStatusFor(spent, limit)` in `src/core/Budget.cpp`:
+
+```text
+IF spent > limit THEN RETURN BUDGET_OVER               // "Over budget"
+IF spent == limit THEN RETURN BUDGET_REACHED           // "Limit reached": nothing left
+IF 5 * spent >= 4 * limit THEN RETURN BUDGET_WARNING   // "Nearing limit": 80% or more
+RETURN BUDGET_ON_TRACK                                 // "On track"
+```
+
+`5 x spent >= 4 x limit` is the same as `spent / limit >= 0.8`, but uses only whole numbers, so there is no rounding. At that point `spent < limit <= 10^12`, so `5 x spent` cannot overflow.
+
+| Spent of a 10,000 limit | Status | Percent shown |
+|---|---|---|
+| 7,999 | On track | 79% (rounded down) |
+| 8,000 | Nearing limit | 80% |
+| 9,999 | Nearing limit | 99% |
+| 10,000 | Limit reached | 100% |
+| 10,001 | Over budget | 100%, and "Over by 0.01" |
+
+`budgetProgressFor(budget, transactions, month)` adds up, with `addChecked`, only the expenses that have the budget's currency, the same category (upper and lower case ignored) and a date in the chosen month. `remaining = limit - spent` is negative when over budget. A budget repeats every month, so choosing another month in the month switcher shows that month's spending against the same limit.
+
+### 10.6 The dashboard: from SQLite to the screen
+
+```mermaid
+flowchart LR
+    DB[("finora.db")] -->|"loadTransactions"| T["vector of Transaction"]
+    DB -->|"BudgetStore::loadBudgets"| B["vector of Budget"]
+    T -->|"summarizeByCurrency"| W["3 WalletCards"]
+    T -->|"monthlyFlow: one currency, 6 or 12 months"| C["MoneyFlowChart"]
+    T -->|"spendingByCategory"| S["Spending by category"]
+    T -->|"first 6 rows, newest first"| R["Recent transactions"]
+    T --> P["allBudgetProgress"]
+    B --> P
+    P -->|"status is not on track"| A["Budget alerts, most used first"]
+```
+
+`DashboardPage::refresh()` loads both lists again and redraws every card. `MainWindow` calls it every time the dashboard is shown, so a transaction added on another page is always included. The month switcher changes the month used by the wallet cards, the chart, the alerts and the spending card. The chart's PKR / USD / EUR switch also chooses the currency of the spending card, because amounts in different currencies are never added together.
+
+### 10.7 Drawing the chart and the progress ring
+
+`MoneyFlowChart` and `ProgressRing` override the virtual function `paintEvent()` and draw with `QPainter`. Qt calls `paintEvent()` whenever the widget must be drawn, for example after `update()`.
+
+```text
+MoneyFlowChart::paintEvent:
+    largest = the biggest income or spending of all months
+    top = chartScaleMaximum(largest)       // a round number in 4 equal steps: 0, 30k, 60k, 90k, 120k
+    draw 5 grid lines with their labels (formatCompactAmount)
+    slot width = plot width / number of months
+    FOR each month i
+        IF i is highlighted THEN draw a pale violet band behind it
+        draw the income bar (teal) left of the slot centre and the spending bar (rose) right of it
+            height = plot height x value / top x growth    // growth goes 0 -> 1 while the bars grow in
+        write the month name under the slot
+    IF a month is highlighted THEN draw the bubble: month, income, spent, net
+    IF the chart has the keyboard focus THEN draw a focus ring
+```
+
+Moving the mouse over a month, or pressing Left, Right, Home or End, highlights it. The same amounts appear as a sentence under the chart and in the chart's accessible description, so nobody has to read values from bar heights. `ProgressRing` draws a grey circle and a coloured arc whose length is the percentage (at most a full circle), with the percentage written in the middle. Both grow in with a `QVariantAnimation`, which is skipped when "Reduce motion" is on.
+
+### 10.8 The design system
+
+**Colour tokens.** `ThemeColors` in `src/ui/Theme.h` names every colour by its job. Both themes have the same names; only the values differ.
+
+| Token | Light | Dark | Used for |
+|---|---|---|---|
+| `canvas` | `#F5F3FC` | `#0F0C1D` | Window background |
+| `surface` | `#FFFFFF` | `#181430` | Cards, sidebar, dialogs |
+| `text` / `textMuted` | `#17132E` / `#625C7E` | `#F2EFFC` / `#ABA5CB` | Main and secondary text |
+| `primary` | `#6D4AFF` | `#6D4AFF` | Finora violet: buttons and selected states |
+| `primaryText` | `#5634E8` | `#A994FF` | Violet text and icons on cards |
+| `income` | `#0F766E` | `#2DD4BF` | Teal: money in |
+| `expense` / `expenseText` | `#D61F45` / `#C01B3E` | `#FB7185` | Rose: money out |
+| `warning` / `warningText` | `#B86A00` / `#94510A` | `#FBBF24` | Amber: a budget at 80% or more |
+
+Wallet cards use one gradient per currency in both themes: green for PKR, blue for USD, violet for EUR.
+
+**Contrast.** Every text colour was checked against its background with the WCAG 2 formula, and all reach at least 4.5 : 1. For example: `textMuted` on white 6.27 : 1, white on `primary` 5.15 : 1, dark `income` on dark `surface` 9.55 : 1. Focus rings reach at least 3 : 1. The edges of check boxes and radio buttons use `textMuted`, so they are clearly visible in both themes.
+
+**One style sheet for both themes.** `resources/styles/finora.qss` writes colours as names in double braces, such as `background-color: {{surface}};`. `fillStyleTemplate()` replaces each name with the colour of the current theme, and `applyTheme()` gives the result to the whole application, together with a `QPalette` for the parts that Qt's Fusion style draws itself. Switching the theme calls `applyTheme()` again.
+
+**Icons.** Each icon is one SVG file that draws with `currentColor`. `tintedIcon(name, colour, size)` replaces that word with a real colour and draws the SVG with `QSvgRenderer`, at the screen's pixel density. Milestone 1 needed two files per icon (grey and white); now one file serves every colour and both themes.
+
+**Fonts.** Inter (body text, numbers, tables) and Manrope (headings) are built into Finora.exe and registered with `QFontDatabase::addApplicationFont`. Both use the SIL Open Font License 1.1; see `THIRD_PARTY_NOTICES.md`.
+
+**Accessibility.**
+
+- Every control works with the keyboard and has a visible focus ring.
+- Status is never shown by colour alone:
+  - budget chips say "On track", "Nearing limit", "Limit reached" or "Over budget";
+  - amounts carry + or -;
+  - wallet captions have up and down arrows.
+- The chart describes the highlighted month in words.
+- Toasts are announced to screen readers.
+- Settings has a "Reduce motion" option that turns off page fades, toast fades, growing bars and growing rings.
+
+```text
+Theme switch (sidebar button or Settings):
+    applyTheme(application, new mode)      // palette + style sheet with the new colours
+    save "theme" in app_settings
+    sidebar.refreshTheme()                 // icons drawn again in the new colours
+    current page.refresh()                 // charts and tables use the new colours
+    show the toast "Dark theme on" or "Light theme on"
+```
+
+### 10.9 Polymorphism: one call, the right page
+
+```cpp
+// Page.h
+class Page : public QWidget
+{
+public:
+    virtual void refresh() {}       // pages without data keep this empty version
+};
+
+// MainWindow.cpp
+std::vector<Page *> pages;          // Dashboard, Transactions, Budgets, ... as Page pointers
+
+void MainWindow::showPage(int pageNumber)
+{
+    pageStack->setCurrentIndex(pageNumber);
+    pages[pageNumber]->refresh();   // runs DashboardPage::refresh, BudgetsPage::refresh, ...
+}
+```
+
+`MainWindow` never asks which page it is talking to. C++ looks up the right `refresh()` at run time through the virtual function. `TransactionsPage::refresh()` reloads its table, `DashboardPage::refresh()` redraws every card, and `PlaceholderPage::refresh()` only recolours its icon.

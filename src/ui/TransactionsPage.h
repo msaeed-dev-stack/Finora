@@ -12,10 +12,10 @@
 #include <QPushButton>
 #include <QTableWidget>
 #include <QTimer>
-#include <QWidget>
 
 #include <vector>
 
+#include "Page.h"
 #include "core/Transaction.h"
 #include "core/TransactionFilter.h"
 #include "database/DatabaseManager.h"
@@ -27,7 +27,7 @@
 // DatabaseManager, and the page keeps a reference to it (`database`).
 // Every change goes through DatabaseManager; afterwards the page reloads
 // the list from SQLite, so the table always shows what is really saved.
-class TransactionsPage : public QWidget
+class TransactionsPage : public Page
 {
     Q_OBJECT   // required because this class has its own slots
 
@@ -43,6 +43,9 @@ public:
 
     // Loads every transaction from SQLite again and shows the filtered list.
     void reloadTransactions();
+
+    // Called by MainWindow when the page is shown or the theme changes (Page).
+    void refresh() override;
 
 private slots:
     void onAddClicked();

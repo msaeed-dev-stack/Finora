@@ -138,3 +138,14 @@ std::string formatMoney(const std::string &currencyCode, long long amountMinor)
 {
     return currencyCode + " " + formatAmount(amountMinor);
 }
+
+std::string formatSignedMoney(const std::string &currencyCode, long long amountMinor)
+{
+    if (amountMinor > 0) {
+        return "+" + currencyCode + " " + formatAmount(amountMinor);
+    }
+    if (amountMinor < 0) {
+        return "-" + currencyCode + " " + formatAmount(-amountMinor);
+    }
+    return currencyCode + " " + formatAmount(0);
+}

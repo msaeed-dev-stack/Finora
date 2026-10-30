@@ -1,0 +1,700 @@
+/* =====================================================================
+   finora.qss - Finora's style sheet for the light AND the dark theme
+
+   A Qt style sheet works like CSS on a web page. Each rule picks some
+   widgets and sets their colours, spacing and corners.
+     QLabel#pageTitle  means: the QLabel whose objectName is "pageTitle".
+     [tone="warning"]  means: a widget whose "tone" property is "warning".
+
+   Words in double braces, such as {{surface}}, are colour names
+   ("design tokens"). Theme.cpp replaces each one with the colour of the
+   theme in use, so this one file serves both themes.
+
+   Fonts: Inter for text and numbers, Manrope for headings.
+   ===================================================================== */
+
+/* ---- Window background ---- */
+QMainWindow,
+QStackedWidget#pageStack,
+QWidget#pageContent {
+    background-color: {{canvas}};
+}
+
+QScrollArea#pageScroll {
+    background-color: {{canvas}};
+    border: none;
+}
+
+QToolTip {
+    background-color: {{tooltip}};
+    color: {{tooltipText}};
+    border: none;
+    border-radius: 6px;
+    padding: 6px 8px;
+}
+
+/* ---- Sidebar ---- */
+QFrame#sidebar {
+    background-color: {{surface}};
+    border: none;
+    border-right: 1px solid {{border}};
+}
+
+QLabel#brandName {
+    color: {{text}};
+    font-family: "Manrope";
+    font-size: 22px;
+    font-weight: 800;
+}
+
+QLabel#brandTagline {
+    color: {{textMuted}};
+    font-size: 11px;
+}
+
+QLabel#sidebarSection {
+    color: {{textMuted}};
+    font-size: 11px;
+    font-weight: 600;
+    padding-left: 12px;
+}
+
+QPushButton#navButton {
+    text-align: left;
+    padding: 9px 12px;
+    border: 2px solid transparent;
+    border-radius: 10px;
+    background-color: transparent;
+    color: {{textMuted}};
+    font-size: 13px;
+    font-weight: 500;
+}
+
+QPushButton#navButton:hover {
+    background-color: {{surfaceMuted}};
+    color: {{text}};
+}
+
+/* The selected page: pale violet with violet text and icon. */
+QPushButton#navButton:checked {
+    background-color: {{primarySoft}};
+    color: {{primaryText}};
+    font-weight: 600;
+}
+
+/* Keyboard focus (Tab key) draws a clear ring. */
+QPushButton#navButton:focus {
+    border-color: {{focus}};
+}
+
+QLabel#navBadge {
+    background-color: {{surfaceMuted}};
+    color: {{textMuted}};
+    border-radius: 8px;
+    padding: 1px 7px;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+QPushButton#themeToggle {
+    text-align: left;
+    padding: 9px 12px;
+    border: 1px solid {{border}};
+    border-radius: 10px;
+    background-color: {{surfaceMuted}};
+    color: {{text}};
+    font-size: 13px;
+    font-weight: 500;
+}
+
+QPushButton#themeToggle:hover {
+    border-color: {{borderStrong}};
+}
+
+QPushButton#themeToggle:focus {
+    border: 2px solid {{focus}};
+    padding: 8px 11px;
+}
+
+QLabel#sidebarFooter {
+    color: {{textMuted}};
+    font-size: 11px;
+    padding-left: 12px;
+}
+
+/* ---- Page header ---- */
+QLabel#pageTitle {
+    color: {{text}};
+    font-family: "Manrope";
+    font-size: 26px;
+    font-weight: 800;
+}
+
+QLabel#pageSubtitle {
+    color: {{textMuted}};
+    font-size: 13px;
+}
+
+/* ---- Cards: boxes with rounded corners ---- */
+QFrame#card {
+    background-color: {{surface}};
+    border: 1px solid {{border}};
+    border-radius: 16px;
+}
+
+QLabel#cardTitle {
+    color: {{text}};
+    font-family: "Manrope";
+    font-size: 15px;
+    font-weight: 700;
+}
+
+QLabel#cardSubtitle,
+QLabel#mutedText,
+QLabel#amountPreview {
+    color: {{textMuted}};
+    font-size: 12px;
+}
+
+QLabel#bodyText {
+    color: {{text}};
+}
+
+QFrame#divider {
+    background-color: {{border}};
+    border: none;
+    min-height: 1px;
+    max-height: 1px;
+}
+
+/* ---- Empty states and "coming soon" cards ---- */
+QLabel#emptyIcon {
+    background-color: {{primarySoft}};
+    border-radius: 20px;
+}
+
+QLabel#emptyTitle {
+    color: {{text}};
+    font-family: "Manrope";
+    font-size: 17px;
+    font-weight: 700;
+}
+
+QLabel#emptyText {
+    color: {{textMuted}};
+    font-size: 13px;
+}
+
+/* ---- Buttons ---- */
+QPushButton#primaryButton {
+    background-color: {{primary}};
+    color: #FFFFFF;
+    border: 2px solid {{primary}};
+    border-radius: 10px;
+    padding: 7px 16px;
+    font-weight: 600;
+}
+
+QPushButton#primaryButton:hover {
+    background-color: {{primaryHover}};
+    border-color: {{primaryHover}};
+}
+
+QPushButton#primaryButton:pressed {
+    background-color: {{primaryPressed}};
+    border-color: {{primaryPressed}};
+}
+
+/* A ring in the text colour stands out against the violet button. */
+QPushButton#primaryButton:focus {
+    border-color: {{text}};
+}
+
+QPushButton#primaryButton:disabled {
+    background-color: {{primarySoft}};
+    border-color: {{primarySoft}};
+    color: {{textMuted}};
+}
+
+QPushButton#secondaryButton,
+QPushButton#dangerButton,
+QPushButton#iconButton {
+    background-color: {{surface}};
+    color: {{text}};
+    border: 1px solid {{borderStrong}};
+    border-radius: 10px;
+    padding: 8px 14px;
+    font-weight: 500;
+}
+
+QPushButton#dangerButton {
+    color: {{expenseText}};
+}
+
+QPushButton#iconButton {
+    padding: 6px;
+}
+
+QPushButton#secondaryButton:hover,
+QPushButton#iconButton:hover {
+    background-color: {{surfaceMuted}};
+}
+
+QPushButton#dangerButton:hover {
+    background-color: {{expenseSoft}};
+    border-color: {{expense}};
+}
+
+QPushButton#secondaryButton:pressed,
+QPushButton#iconButton:pressed {
+    background-color: {{border}};
+}
+
+QPushButton#secondaryButton:focus,
+QPushButton#dangerButton:focus {
+    border: 2px solid {{focus}};
+    padding: 7px 13px;
+}
+
+QPushButton#iconButton:focus {
+    border: 2px solid {{focus}};
+    padding: 5px;
+}
+
+QPushButton#secondaryButton:disabled,
+QPushButton#dangerButton:disabled,
+QPushButton#iconButton:disabled {
+    color: {{textMuted}};
+    border-color: {{border}};
+    background-color: {{surface}};
+}
+
+/* A button that looks like a link, for example "View all". */
+QPushButton#linkButton {
+    background-color: transparent;
+    color: {{primaryText}};
+    border: 2px solid transparent;
+    border-radius: 8px;
+    padding: 3px 8px;
+    font-weight: 600;
+}
+
+QPushButton#linkButton:hover {
+    background-color: {{primarySoft}};
+}
+
+QPushButton#linkButton:focus {
+    border-color: {{focus}};
+}
+
+/* Segmented controls: a row of buttons where one is selected,
+   for example Light | Dark, or PKR | USD | EUR. */
+QFrame#segmented {
+    background-color: {{surfaceMuted}};
+    border: 1px solid {{border}};
+    border-radius: 10px;
+}
+
+QPushButton#segmentButton {
+    background-color: transparent;
+    color: {{textMuted}};
+    border: 2px solid transparent;
+    border-radius: 8px;
+    padding: 4px 12px;
+    font-weight: 500;
+}
+
+QPushButton#segmentButton:hover {
+    color: {{text}};
+}
+
+QPushButton#segmentButton:checked {
+    background-color: {{surface}};
+    color: {{text}};
+    font-weight: 600;
+}
+
+QPushButton#segmentButton:focus {
+    border-color: {{focus}};
+}
+
+/* ---- Text boxes, drop-down lists and date fields ---- */
+QLineEdit,
+QComboBox,
+QDateEdit {
+    background-color: {{surface}};
+    color: {{text}};
+    border: 1px solid {{borderStrong}};
+    border-radius: 10px;
+    padding: 7px 10px;
+    selection-background-color: {{primary}};
+    selection-color: #FFFFFF;
+}
+
+QLineEdit:focus,
+QComboBox:focus,
+QDateEdit:focus {
+    border: 2px solid {{focus}};
+    padding: 6px 9px;
+}
+
+QLineEdit:disabled,
+QComboBox:disabled {
+    color: {{textMuted}};
+    background-color: {{surfaceMuted}};
+}
+
+/* Editable lists and date fields contain their own text box; it must
+   not draw a second border inside the outer one. */
+QComboBox QLineEdit,
+QDateEdit QLineEdit {
+    border: none;
+    padding: 0px;
+    background: transparent;
+}
+
+QComboBox::drop-down,
+QDateEdit::drop-down {
+    border: none;
+    width: 26px;
+}
+
+QComboBox::down-arrow,
+QDateEdit::down-arrow {
+    image: url({{chevronIcon}});
+    width: 12px;
+    height: 12px;
+}
+
+QComboBox QAbstractItemView {
+    background-color: {{surface}};
+    color: {{text}};
+    border: 1px solid {{border}};
+    selection-background-color: {{primarySoft}};
+    selection-color: {{text}};
+    outline: none;
+    padding: 4px;
+}
+
+QCheckBox,
+QRadioButton {
+    color: {{text}};
+}
+
+/* Room after each radio button, so "Income" never touches "Expense". */
+QRadioButton {
+    margin-right: 14px;
+}
+
+/* The check box square uses the muted text colour for its edge, so it is
+   clearly visible in both themes (at least 3:1 against the card). */
+QCheckBox::indicator {
+    width: 14px;
+    height: 14px;
+    border: 2px solid {{textMuted}};
+    border-radius: 5px;
+    background-color: {{surface}};
+}
+
+QCheckBox::indicator:hover {
+    border-color: {{primaryText}};
+}
+
+QCheckBox::indicator:checked {
+    background-color: {{primary}};
+    border-color: {{primary}};
+    image: url(:/icons/check_white.svg);
+}
+
+QCheckBox::indicator:focus {
+    border-color: {{focus}};
+}
+
+/* Radio buttons (Income / Expense): a round edge, and a violet dot in
+   the middle when chosen. */
+QRadioButton::indicator {
+    width: 14px;
+    height: 14px;
+    border: 2px solid {{textMuted}};
+    border-radius: 9px;
+    background-color: {{surface}};
+}
+
+QRadioButton::indicator:hover {
+    border-color: {{primaryText}};
+}
+
+QRadioButton::indicator:checked {
+    border-color: {{primary}};
+    background-color: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+                                      stop:0 {{primary}}, stop:0.55 {{primary}},
+                                      stop:0.6 {{surface}}, stop:1 {{surface}});
+}
+
+QRadioButton::indicator:focus {
+    border-color: {{focus}};
+}
+
+/* ---- Tables ---- */
+QTableWidget#transactionTable,
+QTableWidget#recentTable {
+    background-color: {{surface}};
+    alternate-background-color: {{surfaceMuted}};
+    color: {{text}};
+    border: none;
+    selection-background-color: {{primarySoft}};
+    selection-color: {{text}};
+}
+
+QTableWidget#transactionTable::item,
+QTableWidget#recentTable::item {
+    padding: 6px;
+}
+
+QHeaderView::section {
+    background-color: {{surface}};
+    color: {{textMuted}};
+    border: none;
+    border-bottom: 1px solid {{border}};
+    padding: 8px 6px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QTableCornerButton::section {
+    background-color: {{surface}};
+    border: none;
+}
+
+/* ---- Thin, rounded scroll bars ---- */
+QScrollBar:vertical {
+    background: transparent;
+    width: 10px;
+    margin: 2px;
+}
+
+QScrollBar:horizontal {
+    background: transparent;
+    height: 10px;
+    margin: 2px;
+}
+
+QScrollBar::handle:vertical,
+QScrollBar::handle:horizontal {
+    background-color: {{borderStrong}};
+    border-radius: 3px;
+    min-height: 32px;
+    min-width: 32px;
+}
+
+QScrollBar::handle:vertical:hover,
+QScrollBar::handle:horizontal:hover {
+    background-color: {{textMuted}};
+}
+
+QScrollBar::add-line,
+QScrollBar::sub-line {
+    width: 0px;
+    height: 0px;
+}
+
+QScrollBar::add-page,
+QScrollBar::sub-page {
+    background: transparent;
+}
+
+/* ---- Messages ---- */
+QLabel#successBanner {
+    background-color: {{incomeSoft}};
+    color: {{income}};
+    border-radius: 10px;
+    padding: 9px 12px;
+    font-weight: 500;
+}
+
+QLabel#formError {
+    color: {{expenseText}};
+}
+
+QLabel#toast {
+    background-color: {{tooltip}};
+    color: {{tooltipText}};
+    border-radius: 12px;
+    padding: 10px 18px;
+    font-weight: 500;
+}
+
+/* Chips: small rounded labels. The words always say the status, the
+   colour only repeats it. */
+QLabel#statusChip {
+    border-radius: 9px;
+    padding: 2px 9px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+QLabel#statusChip[tone="success"] {
+    background-color: {{incomeSoft}};
+    color: {{income}};
+}
+
+QLabel#statusChip[tone="warning"] {
+    background-color: {{warningSoft}};
+    color: {{warningText}};
+}
+
+QLabel#statusChip[tone="danger"] {
+    background-color: {{expenseSoft}};
+    color: {{expenseText}};
+}
+
+QLabel#statusChip[tone="info"] {
+    background-color: {{primarySoft}};
+    color: {{primaryText}};
+}
+
+QLabel#statusChip[tone="neutral"] {
+    background-color: {{surfaceMuted}};
+    color: {{textMuted}};
+}
+
+/* Money colours used inside cards and lists. */
+QLabel#incomeAmount {
+    color: {{income}};
+    font-weight: 600;
+}
+
+QLabel#expenseAmount {
+    color: {{expenseText}};
+    font-weight: 600;
+}
+
+QLabel#amountText {
+    color: {{text}};
+    font-weight: 600;
+}
+
+/* ---- Wallet cards: one gradient card per currency ---- */
+QFrame#walletCard {
+    border: none;
+    border-radius: 18px;
+}
+
+QFrame#walletCard[currency="PKR"] {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #065446, stop:1 #0A7A62);
+}
+
+QFrame#walletCard[currency="USD"] {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #1E3A8A, stop:1 #2257D6);
+}
+
+QFrame#walletCard[currency="EUR"] {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #4C1D95, stop:1 #7C3AED);
+}
+
+QFrame#walletCard QLabel {
+    color: #FFFFFF;
+    background: transparent;
+}
+
+QLabel#walletBadge {
+    background-color: rgba(255, 255, 255, 46);
+    border-radius: 18px;
+    font-family: "Manrope";
+    font-size: 14px;
+    font-weight: 800;
+}
+
+QLabel#walletCode {
+    font-family: "Manrope";
+    font-size: 15px;
+    font-weight: 800;
+}
+
+QLabel#walletName,
+QLabel#walletCaption {
+    font-size: 12px;
+}
+
+QLabel#walletBalance {
+    font-size: 25px;
+    font-weight: 700;
+}
+
+QLabel#walletStat {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+QFrame#walletDivider {
+    background-color: rgba(255, 255, 255, 64);
+    border: none;
+    min-height: 1px;
+    max-height: 1px;
+}
+
+/* ---- Budgets ---- */
+QLabel#budgetCategory {
+    color: {{text}};
+    font-family: "Manrope";
+    font-size: 16px;
+    font-weight: 700;
+}
+
+QLabel#monthLabel {
+    color: {{text}};
+    font-weight: 600;
+    min-width: 128px;
+}
+
+QProgressBar {
+    background-color: {{surfaceMuted}};
+    border: none;
+    border-radius: 4px;
+    min-height: 8px;
+    max-height: 8px;
+}
+
+QProgressBar::chunk {
+    background-color: {{primary}};
+    border-radius: 4px;
+}
+
+QProgressBar[tone="success"]::chunk {
+    background-color: {{income}};
+}
+
+QProgressBar[tone="warning"]::chunk {
+    background-color: {{warning}};
+}
+
+QProgressBar[tone="danger"]::chunk {
+    background-color: {{expense}};
+}
+
+/* ---- Dialogs ---- */
+QDialog,
+QMessageBox {
+    background-color: {{surface}};
+}
+
+QDialog QLabel,
+QMessageBox QLabel {
+    color: {{text}};
+}
+
+QLabel#dialogTitle {
+    color: {{text}};
+    font-family: "Manrope";
+    font-size: 19px;
+    font-weight: 800;
+}
+
+QPlainTextEdit#licenceText {
+    background-color: {{surfaceMuted}};
+    color: {{text}};
+    border: 1px solid {{border}};
+    border-radius: 10px;
+    padding: 8px;
+    font-size: 12px;
+}

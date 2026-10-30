@@ -1,51 +1,71 @@
 // =====================================================================
 //  Sidebar.cpp
-//  Builds the sidebar: the logo, one button per page, and the version.
+//  Builds the sidebar: the logo, one button per page, the theme switch
+//  and the version.
 // =====================================================================
 #include "Sidebar.h"
 
 #include <QCoreApplication>
 #include <QHBoxLayout>
-#include <QLabel>
-#include <QPushButton>
+
+#include "Theme.h"
 
 // ---- Data for the navigation buttons --------------------------------
-// One structure per button: the text it shows and the name of its icon.
+// One structure per button: its text, its icon and whether the page is
+// still planned. Planned pages get a "Soon" badge, so the sidebar never
+// pretends that a feature already works.
 struct NavItem {
     const char *label;      // text on the button
     const char *iconName;   // icon file name without ".svg"
+    bool planned;           // true while the page only says "coming soon"
 };
 
 // One item per page. The position in the array is the page number,
 // so NAV_ITEMS[PAGE_BUDGETS] describes the "Budgets" button.
 const NavItem NAV_ITEMS[PAGE_COUNT] = {
-    {"Dashboard",    "dashboard"},
-    {"Transactions", "transactions"},
-    {"Budgets",      "budgets"},
-    {"Goals",        "goals"},
-    {"Reports",      "reports"},
-    {"Currency",     "currency"},
-    {"Settings",     "settings"}
+    {"Dashboard",    "dashboard",    false},
+    {"Transactions", "transactions", false},
+    {"Budgets",      "budgets",      false},
+    {"Goals",        "goals",        true},
+    {"Reports",      "reports",      true},
+    {"Currency",     "currency",     true},
+    {"Settings",     "settings",     false}
 };
 
 Sidebar::Sidebar(QWidget *parent)
     : QFrame(parent)
 {
     setObjectName("sidebar");   // the style sheet finds widgets by this name
-    setFixedWidth(232);
+    setFixedWidth(240);
 
     QVBoxLayout *layout = new QVBoxLayout(this);
     layout->setContentsMargins(16, 22, 16, 16);
     layout->setSpacing(4);
 
     layout->addWidget(createBrandArea());
-    layout->addSpacing(28);
+    layout->addSpacing(26);
+
+    QLabel *menuLabel = new QLabel("MENU", this);
+    menuLabel->setObjectName("sidebarSection");
+    layout->addWidget(menuLabel);
+    layout->addSpacing(4);
+
     createNavButtons(layout);
-    layout->addStretch();   // empty space pushes the version label to the bottom
+    layout->addStretch();   // empty space pushes the theme switch to the bottom
+
+    themeButton = new QPushButton(this);
+    themeButton->setObjectName("themeToggle");
+    themeButton->setIconSize(QSize(18, 18));
+    themeButton->setCursor(Qt::PointingHandCursor);
+    connect(themeButton, &QPushButton::clicked, this, &Sidebar::themeToggleClicked);
+    layout->addWidget(themeButton);
+    layout->addSpacing(8);
 
     QLabel *versionLabel = new QLabel("Version " + QCoreApplication::applicationVersion(), this);
     versionLabel->setObjectName("sidebarFooter");
     layout->addWidget(versionLabel);
+
+    refreshTheme();
 }
 
 void Sidebar::setCurrentPage(int pageNumber)
@@ -58,6 +78,25 @@ void Sidebar::setCurrentPage(int pageNumber)
     navButtonGroup->button(pageNumber)->setChecked(true);
 }
 
+void Sidebar::refreshTheme()
+{
+    for (int pageNumber = 0; pageNumber < PAGE_COUNT; pageNumber++) {
+        navButtonGroup->button(pageNumber)->setIcon(createNavIcon(NAV_ITEMS[pageNumber].iconName));
+    }
+
+    // The button offers the OTHER theme: a moon in the light theme, a sun in the dark one.
+    const ThemeColors &colors = themeColors();
+    if (currentThemeMode() == THEME_DARK) {
+        themeButton->setText("Light mode");
+        themeButton->setIcon(QIcon(tintedIcon("sun", colors.text, 18)));
+        themeButton->setAccessibleName("Switch to the light theme");
+    } else {
+        themeButton->setText("Dark mode");
+        themeButton->setIcon(QIcon(tintedIcon("moon", colors.text, 18)));
+        themeButton->setAccessibleName("Switch to the dark theme");
+    }
+}
+
 void Sidebar::onNavButtonClicked(int pageNumber)
 {
     emit pageSelected(pageNumber);   // tell MainWindow which page was chosen
@@ -68,9 +107,9 @@ QWidget *Sidebar::createBrandArea()
 {
     QWidget *brandArea = new QWidget(this);
 
-    QLabel *logo = new QLabel(brandArea);
-    logo->setPixmap(QIcon(":/icons/logo.svg").pixmap(QSize(38, 38)));
-    logo->setAccessibleName("Finora logo");
+    logoLabel = new QLabel(brandArea);
+    logoLabel->setPixmap(QIcon(":/icons/logo.svg").pixmap(QSize(40, 40)));
+    logoLabel->setAccessibleName("Finora logo");
 
     QLabel *name = new QLabel("Finora", brandArea);
     name->setObjectName("brandName");
@@ -86,7 +125,7 @@ QWidget *Sidebar::createBrandArea()
     QHBoxLayout *brandLayout = new QHBoxLayout(brandArea);
     brandLayout->setContentsMargins(6, 0, 0, 0);
     brandLayout->setSpacing(10);
-    brandLayout->addWidget(logo);
+    brandLayout->addWidget(logoLabel);
     brandLayout->addLayout(textLayout);
     brandLayout->addStretch();
 
@@ -97,15 +136,26 @@ QWidget *Sidebar::createBrandArea()
 void Sidebar::createNavButtons(QVBoxLayout *layout)
 {
     navButtonGroup = new QButtonGroup(this);
+    navButtonGroup->setObjectName("navButtonGroup");
     navButtonGroup->setExclusive(true);   // selecting one button unselects the others
 
     for (int pageNumber = 0; pageNumber < PAGE_COUNT; pageNumber++) {
         QPushButton *button = new QPushButton(NAV_ITEMS[pageNumber].label, this);
         button->setObjectName("navButton");
-        button->setIcon(createNavIcon(NAV_ITEMS[pageNumber].iconName));
         button->setIconSize(QSize(18, 18));
         button->setCheckable(true);
         button->setCursor(Qt::PointingHandCursor);
+
+        // A small "Soon" badge inside the button for planned pages.
+        if (NAV_ITEMS[pageNumber].planned) {
+            QLabel *badge = new QLabel("Soon", button);
+            badge->setObjectName("navBadge");
+            QHBoxLayout *badgeLayout = new QHBoxLayout(button);
+            badgeLayout->setContentsMargins(0, 0, 10, 0);
+            badgeLayout->addStretch();
+            badgeLayout->addWidget(badge, 0, Qt::AlignVCenter);
+            button->setAccessibleName(QString(NAV_ITEMS[pageNumber].label) + " (coming soon)");
+        }
 
         navButtonGroup->addButton(button, pageNumber);   // the button's id is its page number
         layout->addWidget(button);
@@ -115,13 +165,14 @@ void Sidebar::createNavButtons(QVBoxLayout *layout)
     connect(navButtonGroup, &QButtonGroup::idClicked, this, &Sidebar::onNavButtonClicked);
 }
 
-// A button icon made from two image files:
-//   icons/<name>.svg         grey icon for a normal button
-//   icons/<name>_active.svg  white icon for the selected (green) button
+// A button icon in two colours, made from one SVG file:
+//   Off (normal button)    the muted text colour
+//   On  (selected button)  violet
 QIcon Sidebar::createNavIcon(const QString &iconName)
 {
+    const ThemeColors &colors = themeColors();
     QIcon icon;
-    icon.addFile(":/icons/" + iconName + ".svg", QSize(), QIcon::Normal, QIcon::Off);
-    icon.addFile(":/icons/" + iconName + "_active.svg", QSize(), QIcon::Normal, QIcon::On);
+    icon.addPixmap(tintedIcon(iconName, colors.textMuted, 18), QIcon::Normal, QIcon::Off);
+    icon.addPixmap(tintedIcon(iconName, colors.primaryText, 18), QIcon::Normal, QIcon::On);
     return icon;
 }

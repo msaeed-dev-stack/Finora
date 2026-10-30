@@ -1,6 +1,7 @@
 // =====================================================================
 //  finora_ui_tests.cpp
-//  Automated checks for Finora's main window and Transactions page.
+//  Automated checks for Finora's main window, the Transactions page and,
+//  since Milestone 4, the dashboard, the Budgets page and the themes.
 //
 //  The tests build the real MainWindow on a real SQLite database inside
 //  a temporary folder, click buttons from code, and check what appears.
@@ -13,10 +14,13 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QButtonGroup>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDate>
 #include <QDateEdit>
 #include <QDir>
+#include <QElapsedTimer>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -31,12 +35,21 @@
 #include <string>
 #include <vector>
 
+#include "core/Budget.h"
 #include "core/Transaction.h"
+#include "database/BudgetStore.h"
 #include "database/DatabaseManager.h"
+#include "ui/BudgetDialog.h"
+#include "ui/BudgetsPage.h"
+#include "ui/DashboardPage.h"
 #include "ui/MainWindow.h"
+#include "ui/SettingsPage.h"
 #include "ui/Theme.h"
 #include "ui/TransactionDialog.h"
 #include "ui/TransactionsPage.h"
+#include "ui/components/MoneyFlowChart.h"
+#include "ui/components/Toast.h"
+#include "ui/components/WalletCard.h"
 
 // Counts how many checks ran and how many of them failed.
 struct TestCounter {
@@ -372,9 +385,9 @@ void testTransactionsPage(TestCounter &counter, QApplication &app, MainWindow &w
     check(counter, "the count says 5 of 5", countLabel->text() == "Showing 5 of 5 transactions");
     check(counter, "the oldest transaction is the last row",
           table->rowCount() == 5 && table->item(4, 3)->text() == "Coffee");
-    check(counter, "income amounts are green and expense amounts red",
-          table->item(findRow(table, "Monthly salary"), 4)->foreground().color() == QColor("#16A34A")
-              && table->item(findRow(table, "Coffee"), 4)->foreground().color() == QColor("#DC2626"));
+    check(counter, "income amounts use the theme's income colour and expenses the expense colour",
+          table->item(findRow(table, "Monthly salary"), 4)->foreground().color() == themeColors().income
+              && table->item(findRow(table, "Coffee"), 4)->foreground().color() == themeColors().expenseText);
     if (!screenshotFolder.isEmpty()) {
         window.grab().save(screenshotFolder + "/transactions_all.png");
     }
@@ -489,6 +502,429 @@ void testDataAfterRestart(TestCounter &counter, const QString &databasePath)
           editedRow >= 0 && table->item(editedRow, 4)->text() == "PKR 1,500.00");
 }
 
+// =====================================================================
+//  Milestone 4: dashboard, budgets, themes and settings
+// =====================================================================
+
+// The red message of the budget form, saved by tryDuplicateBudget().
+QString lastFormError;
+
+// Lets Qt run for a while, so that animations (growing bars, fading
+// pages) and timers finish before a check or a screenshot.
+void waitFor(int milliseconds)
+{
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < milliseconds) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+}
+
+// Pages rebuild their cards with deleteLater(). This deletes the old
+// cards now, so findChildren() only finds the new ones.
+void flushDeletedWidgets()
+{
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+}
+
+// A date in this month (monthsBack = 0) or an earlier month.
+QDate dayInMonth(int monthsBack, int day)
+{
+    QDate month = QDate::currentDate().addMonths(-monthsBack);
+    return QDate(month.year(), month.month(), day);
+}
+
+QString monthText(int monthsBack)
+{
+    return QDate::currentDate().addMonths(-monthsBack).toString("yyyy-MM");
+}
+
+// The message of the window's toast, or "" when no toast is showing.
+QString toastText(QWidget *window)
+{
+    Toast *toast = window->findChild<Toast *>();
+    if (toast == nullptr || toast->isHidden()) {
+        return QString();
+    }
+    return toast->text();
+}
+
+// The visible button with this text that belongs to budget `budgetId`.
+QPushButton *budgetButton(QWidget *page, const QString &text, int budgetId)
+{
+    QList<QPushButton *> buttons = page->findChildren<QPushButton *>();
+    for (int i = 0; i < buttons.size(); i++) {
+        if (buttons[i]->text() == text && buttons[i]->property("budgetId").toInt() == budgetId
+            && !buttons[i]->isHidden()) {
+            return buttons[i];
+        }
+    }
+    return nullptr;
+}
+
+// The progress of the shown budget with this category and currency.
+bool findShownBudget(BudgetsPage *page, const std::string &category, const std::string &currency,
+                     BudgetProgress &result)
+{
+    const std::vector<BudgetProgress> &shown = page->shownProgress();
+    for (int i = 0; i < static_cast<int>(shown.size()); i++) {
+        if (shown[i].budget.category == category && shown[i].budget.currencyCode == currency) {
+            result = shown[i];
+            return true;
+        }
+    }
+    return false;
+}
+
+void fillBudgetForm(BudgetDialog *dialog, const QString &category, const QString &currency, const QString &limit)
+{
+    dialog->findChild<QComboBox *>("budgetCategoryBox")->setCurrentText(category);
+    QComboBox *currencyBox = dialog->findChild<QComboBox *>("budgetCurrencyBox");
+    currencyBox->setCurrentIndex(currencyBox->findData(currency));
+    dialog->findChild<QLineEdit *>("budgetLimitEdit")->setText(limit);
+}
+
+void createFoodBudget()
+{
+    BudgetDialog *dialog = qobject_cast<BudgetDialog *>(QApplication::activeModalWidget());
+    if (dialog == nullptr) {
+        return;
+    }
+    fillBudgetForm(dialog, "Food", "PKR", "20,000");
+    saveScreenshot(dialog, "budget_dialog");
+    dialog->findChild<QPushButton *>("primaryButton")->click();   // Save Budget
+}
+
+void tryDuplicateBudget()
+{
+    BudgetDialog *dialog = qobject_cast<BudgetDialog *>(QApplication::activeModalWidget());
+    if (dialog == nullptr) {
+        return;
+    }
+    fillBudgetForm(dialog, "food", "PKR", "100");
+    dialog->findChild<QPushButton *>("primaryButton")->click();   // refused: stays open
+    lastFormError = dialog->findChild<QLabel *>("formError")->text();
+    saveScreenshot(dialog, "budget_dialog_duplicate");
+    findButton(dialog, "Cancel")->click();
+}
+
+void changeBudgetLimit()
+{
+    BudgetDialog *dialog = qobject_cast<BudgetDialog *>(QApplication::activeModalWidget());
+    if (dialog == nullptr) {
+        return;
+    }
+    dialog->findChild<QLineEdit *>("budgetLimitEdit")->setText("25,000");
+    dialog->findChild<QPushButton *>("primaryButton")->click();
+}
+
+void answerBudgetNo()
+{
+    answerMessageBox(QMessageBox::No, "budget_delete_confirmation");
+}
+
+void answerBudgetYes()
+{
+    answerMessageBox(QMessageBox::Yes, "budget_delete_confirmation_yes");
+}
+
+// Saves a picture of the open pop-up form under `nextDialogPicture`,
+// then closes it with Cancel. Used to show the forms in the dark theme.
+QString nextDialogPicture;
+
+void pictureDialogAndCancel()
+{
+    QDialog *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+    if (dialog == nullptr) {
+        return;
+    }
+    saveScreenshot(dialog, nextDialogPicture);
+    dialog->reject();
+}
+
+void saveWindowScreenshot(QWidget &window, const QString &folder, const QString &name)
+{
+    if (!folder.isEmpty()) {
+        waitFor(700);   // let the bars, rings and page fade finish
+        window.grab().save(folder + "/" + name + ".png");
+    }
+}
+
+void testDashboardAndBudgets(TestCounter &counter, QApplication &app, const QString &databasePath,
+                             const QString &screenshotFolder)
+{
+    DatabaseManager database("ui_tests_m4");
+    bool opened = database.open(databasePath);
+    check(counter, "the Milestone 4 test database opens", opened);
+    if (!opened) {
+        return;
+    }
+
+    // Known transactions: this month (0) and last month (1).
+    Transaction rows[8] = {
+        makeTransaction(TYPE_INCOME, 12000000, "PKR", "Salary", "October salary", dayInMonth(0, 1)),
+        makeTransaction(TYPE_EXPENSE, 1650000, "PKR", "Food", "Groceries for the month", dayInMonth(0, 2)),
+        makeTransaction(TYPE_EXPENSE, 158050, "PKR", "Food", "Dinner with family", dayInMonth(0, 3)),
+        makeTransaction(TYPE_EXPENSE, 500000, "PKR", "Transport", "Fuel", dayInMonth(0, 4)),
+        makeTransaction(TYPE_INCOME, 50000, "USD", "Freelance", "Logo design", dayInMonth(0, 5)),
+        makeTransaction(TYPE_EXPENSE, 13500, "USD", "Shopping", "Headphones", dayInMonth(0, 6)),
+        makeTransaction(TYPE_EXPENSE, 4500000, "PKR", "Rent", "Flat rent", dayInMonth(1, 1)),
+        makeTransaction(TYPE_INCOME, 20000, "EUR", "Gift", "Birthday gift", dayInMonth(1, 15))
+    };
+    bool allSaved = true;
+    for (int i = 0; i < 8; i++) {
+        allSaved = database.addTransaction(rows[i]) && allSaved;
+    }
+    check(counter, "8 known transactions are saved", allSaved);
+
+    MainWindow window(database);
+    window.resize(1280, 900);
+    window.show();
+    app.processEvents();
+
+    // ---- Dashboard: wallet cards ----
+    DashboardPage *dashboard = window.findChild<DashboardPage *>("dashboardPage");
+    check(counter, "the dashboard is a real page now", dashboard != nullptr);
+    if (dashboard == nullptr) {
+        return;
+    }
+    WalletCard *pkr = dashboard->walletCard("PKR");
+    WalletCard *usd = dashboard->walletCard("USD");
+    WalletCard *eur = dashboard->walletCard("EUR");
+    check(counter, "there is one wallet card for each currency", pkr && usd && eur);
+    check(counter, "PKR card: the balance over all time is PKR 51,919.50", pkr->balanceText() == "PKR 51,919.50");
+    check(counter, "PKR card: this month's income and spending",
+          pkr->incomeText() == "PKR 120,000.00" && pkr->expenseText() == "PKR 23,080.50");
+    check(counter, "USD card: added up on its own, balance USD 365.00",
+          usd->balanceText() == "USD 365.00" && usd->expenseText() == "USD 135.00");
+    check(counter, "EUR card: last month's gift is in the balance but not in this month",
+          eur->balanceText() == "EUR 200.00" && eur->incomeText() == "EUR 0.00");
+
+    // ---- Dashboard: the chart ----
+    MoneyFlowChart *chart = dashboard->chart();
+    std::vector<MonthFlow> flows = chart->flows();
+    check(counter, "the chart shows 6 months of PKR", flows.size() == 6 && dashboard->chartCurrency() == "PKR");
+    check(counter, "the newest bars are this month's PKR income and spending",
+          flows.size() == 6 && flows[5].incomeMinor == 12000000 && flows[5].expenseMinor == 2308050);
+    check(counter, "last month's rent is in the bar before", flows.size() == 6 && flows[4].expenseMinor == 4500000);
+
+    dashboard->setChartCurrency("USD");
+    flows = chart->flows();
+    check(counter, "switching the chart to USD shows only dollars",
+          flows.size() == 6 && flows[5].incomeMinor == 50000 && flows[5].expenseMinor == 13500);
+    findButton(dashboard, "12 months")->click();
+    check(counter, "the 12 months button shows 12 bars", chart->flows().size() == 12);
+    findButton(dashboard, "6 months")->click();
+    dashboard->setChartCurrency("PKR");
+
+    // Keyboard: End highlights the newest month, Left the month before.
+    chart->setFocus();
+    QKeyEvent endKey(QEvent::KeyPress, Qt::Key_End, Qt::NoModifier);
+    QApplication::sendEvent(chart, &endKey);
+    QKeyEvent leftKey(QEvent::KeyPress, Qt::Key_Left, Qt::NoModifier);
+    QApplication::sendEvent(chart, &leftKey);
+    check(counter, "the arrow keys move the highlight to last month", chart->highlightedIndex() == 4);
+    check(counter, "the chart describes the highlighted month in words",
+          chart->summaryText().contains("spent PKR 45,000.00"));
+    chart->setHighlightedIndex(-1);
+
+    QTableWidget *recent = dashboard->findChild<QTableWidget *>("recentTable");
+    check(counter, "recent transactions shows the 6 newest of 8", recent->rowCount() == 6);
+    check(counter, "spending has a minus sign and income a plus sign",
+          recent->item(0, 3)->text() == "-USD 135.00" && recent->item(5, 3)->text() == "+PKR 120,000.00");
+    check(counter, "with no budgets there are no budget alerts", dashboard->budgetAlertCount() == 0);
+    saveWindowScreenshot(window, screenshotFolder, "m4_dashboard_no_budgets");
+
+    // ---- Budgets page ----
+    QButtonGroup *navGroup = window.findChild<QButtonGroup *>("navButtonGroup");
+    navGroup->button(PAGE_BUDGETS)->click();
+    BudgetsPage *budgetsPage = window.findChild<BudgetsPage *>("budgetsPage");
+    check(counter, "the Budgets page is a real page now", budgetsPage != nullptr);
+    if (budgetsPage == nullptr) {
+        return;
+    }
+    check(counter, "with no budgets the page shows the empty state",
+          budgetsPage->shownProgress().empty() && findButton(budgetsPage, "Create your first budget") != nullptr
+              && findButton(budgetsPage, "Create your first budget")->isVisible());
+    saveWindowScreenshot(window, screenshotFolder, "m4_budgets_empty");
+
+    // Create a budget with the real button and the real form.
+    QTimer::singleShot(0, createFoodBudget);
+    findButton(budgetsPage, "+  New Budget")->click();
+    flushDeletedWidgets();
+    BudgetProgress food;
+    bool foodShown = findShownBudget(budgetsPage, "Food", "PKR", food);
+    check(counter, "the form created a Food budget of PKR 20,000.00",
+          foodShown && food.budget.limitMinor == 2000000 && food.budget.id > 0);
+    check(counter, "Food at 90% (18,080.50 of 20,000) is 'Nearing limit'",
+          food.percentUsed == 90 && food.status == BUDGET_WARNING);
+    check(counter, "a toast confirms the new budget", toastText(&window) == "Budget created.");
+
+    // The form refuses a second Food budget in PKR and stays open.
+    lastFormError.clear();
+    QTimer::singleShot(0, tryDuplicateBudget);
+    findButton(budgetsPage, "+  New Budget")->click();
+    check(counter, "the form refuses a second Food budget in PKR, also in lower case",
+          lastFormError.startsWith("There is already a Food budget in PKR"));
+    check(counter, "the refused form saved nothing", budgetsPage->shownProgress().size() == 1);
+
+    Budget transport;
+    transport.category = "Transport";
+    transport.currencyCode = "PKR";
+    transport.limitMinor = 500000;   // exactly what was spent
+    Budget shopping;
+    shopping.category = "Shopping";
+    shopping.currencyCode = "USD";
+    shopping.limitMinor = 10000;     // 135.00 spent of 100.00
+    Budget rent;
+    rent.category = "Rent";
+    rent.currencyCode = "PKR";
+    rent.limitMinor = 5000000;       // no rent this month
+    bool threeSaved = budgetsPage->saveNewBudget(transport) && budgetsPage->saveNewBudget(shopping)
+                      && budgetsPage->saveNewBudget(rent);
+    flushDeletedWidgets();
+    check(counter, "three more budgets are saved", threeSaved && budgetsPage->shownProgress().size() == 4);
+
+    BudgetProgress shown;
+    check(counter, "Transport spent exactly its limit: 'Limit reached'",
+          findShownBudget(budgetsPage, "Transport", "PKR", shown) && shown.status == BUDGET_REACHED
+              && shown.remainingMinor == 0);
+    check(counter, "Shopping in USD is over budget by USD 35.00",
+          findShownBudget(budgetsPage, "Shopping", "USD", shown) && shown.status == BUDGET_OVER
+              && shown.remainingMinor == -3500 && shown.percentUsed == 135);
+    check(counter, "Rent has nothing spent this month: 'On track'",
+          findShownBudget(budgetsPage, "Rent", "PKR", shown) && shown.status == BUDGET_ON_TRACK);
+    check(counter, "every budget card has its own Edit and Delete buttons",
+          budgetButton(budgetsPage, "Edit", rent.id) != nullptr && budgetButton(budgetsPage, "Delete", rent.id) != nullptr);
+    saveWindowScreenshot(window, screenshotFolder, "m4_budgets_light");
+
+    // Last month: rent was paid, so Rent is at 90%; Food was not used.
+    budgetsPage->monthSwitcher()->setMonth(monthText(1));
+    check(counter, "last month Rent was at 90%",
+          findShownBudget(budgetsPage, "Rent", "PKR", shown) && shown.percentUsed == 90
+              && shown.status == BUDGET_WARNING);
+    check(counter, "last month nothing was spent on Food",
+          findShownBudget(budgetsPage, "Food", "PKR", shown) && shown.spentMinor == 0);
+    budgetsPage->monthSwitcher()->setMonth(monthText(0));
+    flushDeletedWidgets();
+
+    // Edit Food to PKR 25,000.00 with its own Edit button.
+    QTimer::singleShot(0, changeBudgetLimit);
+    budgetButton(budgetsPage, "Edit", food.budget.id)->click();
+    flushDeletedWidgets();
+    check(counter, "after editing, Food is PKR 25,000.00 and on track (72%)",
+          findShownBudget(budgetsPage, "Food", "PKR", shown) && shown.budget.limitMinor == 2500000
+              && shown.percentUsed == 72 && shown.status == BUDGET_ON_TRACK);
+
+    // Delete Rent: No keeps it, Yes deletes it.
+    QTimer::singleShot(0, answerBudgetNo);
+    budgetButton(budgetsPage, "Delete", rent.id)->click();
+    flushDeletedWidgets();
+    check(counter, "deleting a budget asks first",
+          lastMessageText.startsWith("Delete the budget Rent"));
+    check(counter, "answering No keeps the budget", budgetsPage->shownProgress().size() == 4);
+    QTimer::singleShot(0, answerBudgetYes);
+    budgetButton(budgetsPage, "Delete", rent.id)->click();
+    flushDeletedWidgets();
+    BudgetStore checkStore(database);
+    std::vector<Budget> stored;
+    checkStore.loadBudgets(stored);
+    check(counter, "answering Yes deletes it from SQLite", budgetsPage->shownProgress().size() == 3 && stored.size() == 3);
+    check(counter, "a toast confirms the deletion", toastText(&window) == "Budget deleted.");
+
+    // ---- Back on the dashboard ----
+    navGroup->button(PAGE_DASHBOARD)->click();
+    check(counter, "the dashboard now lists 2 budget alerts (Transport reached, Shopping over)",
+          dashboard->budgetAlertCount() == 2);
+    saveWindowScreenshot(window, screenshotFolder, "m4_dashboard_light");
+
+    // "+ Add Transaction" on the dashboard uses the same form as the Transactions page.
+    QTimer::singleShot(0, fillAddDialogAndSave);   // PKR 1,200.50 Food, today
+    findButton(dashboard, "+  Add Transaction")->click();
+    check(counter, "a transaction added on the dashboard updates the PKR card at once",
+          pkr->expenseText() == "PKR 24,281.00");
+    check(counter, "a toast confirms the new transaction", toastText(&window) == "Transaction added.");
+
+    // ---- Theme switching ----
+    QPushButton *themeToggle = window.findChild<QPushButton *>("themeToggle");
+    check(counter, "Finora starts in the light theme", !window.isDarkTheme() && themeToggle->text() == "Dark mode");
+    themeToggle->click();
+    check(counter, "the sidebar button switches to the dark theme",
+          window.isDarkTheme() && app.styleSheet().contains(darkThemeColors().canvas.name()));
+    check(counter, "the dark theme is saved in the database", database.setting("theme", "") == "dark");
+    check(counter, "the button now offers the light theme", themeToggle->text() == "Light mode");
+    check(counter, "a toast says the dark theme is on", toastText(&window) == "Dark theme on");
+    // Find the USD 500.00 income by its text: its row depends on today's
+    // date, because the groceries added above are dated today.
+    int incomeRow = -1;
+    for (int row = 0; row < recent->rowCount(); row++) {
+        if (recent->item(row, 3)->text() == "+USD 500.00") {
+            incomeRow = row;
+        }
+    }
+    check(counter, "amounts are drawn in the dark theme's colours",
+          incomeRow >= 0 && recent->item(incomeRow, 3)->foreground().color() == darkThemeColors().income);
+    saveWindowScreenshot(window, screenshotFolder, "m4_dashboard_dark");
+
+    // Pictures of both forms in the dark theme; Cancel saves nothing.
+    nextDialogPicture = "transaction_dialog_dark";
+    QTimer::singleShot(0, pictureDialogAndCancel);
+    findButton(dashboard, "+  Add Transaction")->click();
+    check(counter, "cancelling the form on the dashboard adds nothing", pkr->expenseText() == "PKR 24,281.00");
+
+    navGroup->button(PAGE_BUDGETS)->click();
+    nextDialogPicture = "budget_dialog_dark";
+    QTimer::singleShot(0, pictureDialogAndCancel);
+    findButton(budgetsPage, "+  New Budget")->click();
+    flushDeletedWidgets();
+    check(counter, "cancelling the budget form adds nothing", budgetsPage->shownProgress().size() == 3);
+    saveWindowScreenshot(window, screenshotFolder, "m4_budgets_dark");
+    navGroup->button(PAGE_TRANSACTIONS)->click();
+    saveWindowScreenshot(window, screenshotFolder, "m4_transactions_dark");
+    navGroup->button(PAGE_GOALS)->click();
+    saveWindowScreenshot(window, screenshotFolder, "m4_goals_dark");
+
+    // ---- Settings ----
+    navGroup->button(PAGE_SETTINGS)->click();
+    SettingsPage *settings = window.findChild<SettingsPage *>("settingsPage");
+    QCheckBox *motionBox = settings->findChild<QCheckBox *>("reducedMotionBox");
+    check(counter, "Settings shows the dark theme as selected", findButton(settings, "Dark")->isChecked());
+    saveWindowScreenshot(window, screenshotFolder, "m4_settings_dark");
+
+    motionBox->click();
+    check(counter, "Reduce motion turns animations off and is saved",
+          isReducedMotion() && database.setting("reduced_motion", "0") == "1");
+    motionBox->click();
+    check(counter, "turning it off again is saved too",
+          !isReducedMotion() && database.setting("reduced_motion", "1") == "0");
+
+    findButton(settings, "Light")->click();
+    check(counter, "the Light button in Settings switches back and saves it",
+          !window.isDarkTheme() && database.setting("theme", "") == "light"
+              && app.styleSheet().contains(lightThemeColors().canvas.name()));
+    saveWindowScreenshot(window, screenshotFolder, "m4_settings_light");
+    navGroup->button(PAGE_TRANSACTIONS)->click();
+    saveWindowScreenshot(window, screenshotFolder, "m4_transactions_light");
+}
+
+// The theme is remembered when Finora starts again.
+void testAppearanceAfterRestart(TestCounter &counter, const QString &databasePath)
+{
+    DatabaseManager database("ui_tests_m4_restart");
+    database.open(databasePath);
+    database.saveSetting("theme", "dark");
+    database.saveSetting("reduced_motion", "1");
+    {
+        MainWindow window(database);
+        check(counter, "after a restart Finora opens in the saved dark theme, with reduced motion",
+              window.isDarkTheme() && isReducedMotion());
+    }
+    database.saveSetting("theme", "light");
+    database.saveSetting("reduced_motion", "0");
+    MainWindow window(database);
+    check(counter, "and in the light theme once light is saved", !window.isDarkTheme() && !isReducedMotion());
+}
+
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
@@ -506,6 +942,7 @@ int main(int argc, char *argv[])
         popupScreenshotFolder = screenshotFolder;
     }
 
+    check(counter, "the bundled Inter and Manrope fonts load", loadBundledFonts());
     check(counter, "light theme and style sheet load", applyLightTheme(app));
 
     // A real database in a temporary folder that is deleted at the end.
@@ -526,6 +963,11 @@ int main(int argc, char *argv[])
 
     testDialogValidation(counter);
     testDataAfterRestart(counter, databasePath);
+
+    std::cout << "---- Milestone 4: dashboard, budgets, themes ----\n";
+    QString milestone4Path = temporaryFolder.path() + "/ui_test_m4.db";
+    testDashboardAndBudgets(counter, app, milestone4Path, screenshotFolder);
+    testAppearanceAfterRestart(counter, milestone4Path);
 
     std::cout << "----------------------\n";
     std::cout << counter.checksRun << " checks, " << counter.checksFailed << " failed\n";

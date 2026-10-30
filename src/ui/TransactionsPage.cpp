@@ -13,6 +13,7 @@
 #include <QVBoxLayout>
 
 #include "PageHeader.h"
+#include "Theme.h"
 #include "TransactionDialog.h"
 #include "core/Money.h"
 
@@ -34,7 +35,7 @@ const int PERIOD_THIS_YEAR = 3;
 // DatabaseManager that main() created. A reference member must be set
 // here, because a reference cannot be changed after it is created.
 TransactionsPage::TransactionsPage(DatabaseManager &sharedDatabase, QWidget *parent)
-    : QWidget(parent), database(sharedDatabase)
+    : Page(parent), database(sharedDatabase)
 {
     setObjectName("transactionsPage");
 
@@ -243,6 +244,13 @@ void TransactionsPage::reloadTransactions()
     applyFilters();
 }
 
+// Another page may have added transactions, and the theme may have
+// changed the colours, so the list is loaded and drawn again.
+void TransactionsPage::refresh()
+{
+    reloadTransactions();
+}
+
 // ---- Slots ---------------------------------------------------------
 
 void TransactionsPage::onAddClicked()
@@ -395,10 +403,10 @@ void TransactionsPage::showTransactions(const std::vector<Transaction> &transact
             QString::fromStdString(formatMoney(transaction.currencyCode, transaction.amountMinor)));
         amountItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
-        // Green for income, red for expenses.
-        QColor color("#DC2626");
+        // Teal for income, rose for expenses, from the current theme.
+        QColor color = themeColors().expenseText;
         if (isIncome) {
-            color = QColor("#16A34A");
+            color = themeColors().income;
         }
         typeItem->setForeground(QBrush(color));
         amountItem->setForeground(QBrush(color));

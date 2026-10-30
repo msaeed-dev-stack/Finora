@@ -207,7 +207,8 @@ void TransactionDialog::onSaveClicked()
     if (!readForm(entered, problem)) {
         errorLabel->setText(problem);
         errorLabel->show();
-        return;   // the dialog stays open so the user can correct it
+        adjustSize();   // grow the form so the message fits without squeezing the fields
+        return;         // the dialog stays open so the user can correct it
     }
 
     savedTransaction = entered;

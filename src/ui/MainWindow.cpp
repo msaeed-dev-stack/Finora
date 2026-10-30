@@ -3,18 +3,23 @@
 // =====================================================================
 #include "MainWindow.h"
 
+#include <QApplication>
+#include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QScreen>
-#include <QTime>
 
+#include "BudgetsPage.h"
+#include "DashboardPage.h"
 #include "PlaceholderPage.h"
+#include "Theme.h"
 #include "TransactionsPage.h"
-#include "core/Greeting.h"
+#include "components/Toast.h"
 
 // ---- Text for the pages that are not built yet ----------------------
-// One structure per page, in page-number order (see Sidebar.h). The
-// Transactions entry is no longer shown: Milestone 3 built that page.
+// One structure per page, in page-number order (see Sidebar.h). Only
+// the planned pages (Goals, Reports, Currency) still use these texts;
+// the other pages are real.
 struct PageInfo {
     const char *title;            // large heading at the top of the page
     const char *subtitle;         // grey line under the heading
@@ -24,11 +29,11 @@ struct PageInfo {
 };
 
 const PageInfo PAGE_INFO[PAGE_COUNT] = {
-    {"Dashboard", "Here's your financial overview", "dashboard", 4,
+    {"Dashboard", "Here's your money at a glance", "dashboard", 4,
      "Income, expense and balance summaries for each currency, recent transactions and budget alerts."},
     {"Transactions", "Manage your income and expenses", "transactions", 3,
      "Add, edit, search, filter and delete your income and expense records."},
-    {"Budgets", "Set and track your spending limits", "budgets", 4,
+    {"Budgets", "Monthly spending limits for each category", "budgets", 4,
      "Monthly budgets for each category, with a warning at 80% and an alert at 100%."},
     {"Savings Goals", "Track your progress towards your dreams", "goals", 5,
      "Create savings goals, add contributions and follow your progress."},
@@ -36,26 +41,42 @@ const PageInfo PAGE_INFO[PAGE_COUNT] = {
      "Totals by month, category and type, plus export to a CSV file."},
     {"Currency Settings", "Manage currencies and exchange rates", "currency", 5,
      "PKR, USD and EUR, with exchange rates that you enter yourself."},
-    {"Settings", "Customise your application", "settings", 6,
-     "Your default currency and other preferences."}
+    {"Settings", "Appearance, your data and information about Finora", "settings", 4,
+     "Theme, reduced motion and where your data is kept."}
 };
 
-MainWindow::MainWindow(DatabaseManager &database, QWidget *parent)
-    : QMainWindow(parent)
+// The initializer list sets the reference member `database` and builds
+// the BudgetStore member with the same database.
+MainWindow::MainWindow(DatabaseManager &sharedDatabase, QWidget *parent)
+    : QMainWindow(parent), database(sharedDatabase), budgetStore(sharedDatabase)
 {
     setWindowTitle("Finora");
     setWindowIcon(QIcon(":/icons/logo.svg"));
-    setMinimumSize(960, 600);
+    setMinimumSize(1024, 640);
 
+    applySavedAppearance();   // before any widget is made, so all start in the right theme
     createLayout();
-    createPages(database);
+    createPages();
     setStartingSize();
 
-    // Signal and slot: when the sidebar sends pageSelected(n),
-    // Qt automatically calls showPage(n).
+    pageFade = new QPropertyAnimation(this);
+    pageFade->setPropertyName("opacity");
+    pageFade->setDuration(180);
+    pageFade->setStartValue(0.35);
+    pageFade->setEndValue(1.0);
+    connect(pageFade, &QPropertyAnimation::finished, this, &MainWindow::onPageFadeFinished);
+
+    // Signals and slots: when the sidebar sends pageSelected(n), Qt
+    // automatically calls showPage(n), and so on.
     connect(sidebar, &Sidebar::pageSelected, this, &MainWindow::showPage);
+    connect(sidebar, &Sidebar::themeToggleClicked, this, &MainWindow::toggleTheme);
 
     showPage(PAGE_DASHBOARD);   // the program always starts on the dashboard
+}
+
+bool MainWindow::isDarkTheme() const
+{
+    return currentThemeMode() == THEME_DARK;
 }
 
 void MainWindow::showPage(int pageNumber)
@@ -67,6 +88,69 @@ void MainWindow::showPage(int pageNumber)
 
     pageStack->setCurrentIndex(pageNumber);   // show the page
     sidebar->setCurrentPage(pageNumber);      // highlight its button
+    pages[pageNumber]->refresh();             // virtual call: the page's own refresh()
+    fadeInPage(pages[pageNumber]);
+}
+
+void MainWindow::setDarkTheme(bool dark)
+{
+    ThemeMode mode = THEME_LIGHT;
+    if (dark) {
+        mode = THEME_DARK;
+    }
+    applyTheme(*qApp, mode);
+
+    QString value = "light";
+    if (dark) {
+        value = "dark";
+    }
+    database.saveSetting("theme", value);
+
+    // Pictures (icons, chart colours) are made again in the new colours.
+    sidebar->refreshTheme();
+    settingsPage->refresh();
+    pages[pageStack->currentIndex()]->refresh();
+
+    if (dark) {
+        Toast::showMessage(this, "Dark theme on");
+    } else {
+        Toast::showMessage(this, "Light theme on");
+    }
+}
+
+void MainWindow::setReducedMotionEnabled(bool reduced)
+{
+    setReducedMotion(reduced);
+    QString value = "0";
+    if (reduced) {
+        value = "1";
+    }
+    database.saveSetting("reduced_motion", value);
+    settingsPage->refresh();
+
+    if (reduced) {
+        Toast::showMessage(this, "Reduced motion on: changes appear without animation");
+    } else {
+        Toast::showMessage(this, "Animations on");
+    }
+}
+
+void MainWindow::toggleTheme()
+{
+    setDarkTheme(!isDarkTheme());
+}
+
+// Theme and motion setting saved in the database. A missing or unknown
+// value means the defaults: light theme, animations on.
+void MainWindow::applySavedAppearance()
+{
+    setReducedMotion(database.setting("reduced_motion", "0") == "1");
+
+    ThemeMode mode = THEME_LIGHT;
+    if (database.setting("theme", "light") == "dark") {
+        mode = THEME_DARK;
+    }
+    applyTheme(*qApp, mode);
 }
 
 // Sidebar on the left, page area on the right.
@@ -87,30 +171,41 @@ void MainWindow::createLayout()
     setCentralWidget(centralArea);
 }
 
-// Creates one page for every sidebar button, using a for loop.
-// The Transactions page is real; the other pages are still placeholders.
-void MainWindow::createPages(DatabaseManager &database)
+// Creates one page for every sidebar button, using a for loop and a
+// switch. Every page is stored as a Page pointer (its base class).
+void MainWindow::createPages()
 {
     for (int pageNumber = 0; pageNumber < PAGE_COUNT; pageNumber++) {
-        if (pageNumber == PAGE_TRANSACTIONS) {
-            pageStack->addWidget(new TransactionsPage(database, pageStack));
-            continue;   // go on with the next page number
+        Page *page = nullptr;
+
+        switch (pageNumber) {
+        case PAGE_DASHBOARD: {
+            DashboardPage *dashboard = new DashboardPage(database, budgetStore, pageStack);
+            connect(dashboard, &DashboardPage::openPageRequested, this, &MainWindow::showPage);
+            page = dashboard;
+            break;
+        }
+        case PAGE_TRANSACTIONS:
+            page = new TransactionsPage(database, pageStack);
+            break;
+        case PAGE_BUDGETS:
+            page = new BudgetsPage(database, budgetStore, pageStack);
+            break;
+        case PAGE_SETTINGS:
+            settingsPage = new SettingsPage(database, pageStack);
+            connect(settingsPage, &SettingsPage::darkThemeChosen, this, &MainWindow::setDarkTheme);
+            connect(settingsPage, &SettingsPage::reducedMotionChosen, this, &MainWindow::setReducedMotionEnabled);
+            page = settingsPage;
+            break;
+        default:
+            // Goals, Reports and Currency are planned: an honest "coming soon" page.
+            page = new PlaceholderPage(PAGE_INFO[pageNumber].title, PAGE_INFO[pageNumber].subtitle,
+                                       PAGE_INFO[pageNumber].iconName, PAGE_INFO[pageNumber].milestone,
+                                       PAGE_INFO[pageNumber].plannedFeatures, pageStack);
+            break;
         }
 
-        QString title = PAGE_INFO[pageNumber].title;
-
-        // The dashboard greets the user according to the time of day.
-        if (pageNumber == PAGE_DASHBOARD) {
-            int hour = QTime::currentTime().hour();
-            title = QString::fromStdString(greetingForHour(hour));
-        }
-
-        PlaceholderPage *page = new PlaceholderPage(title,
-                                                    PAGE_INFO[pageNumber].subtitle,
-                                                    PAGE_INFO[pageNumber].iconName,
-                                                    PAGE_INFO[pageNumber].milestone,
-                                                    PAGE_INFO[pageNumber].plannedFeatures,
-                                                    pageStack);
+        pages.push_back(page);
         pageStack->addWidget(page);
     }
 }
@@ -139,4 +234,32 @@ void MainWindow::setStartingSize()
     int left = screenArea.x() + (screenArea.width() - width) / 2;
     int top = screenArea.y() + (screenArea.height() - height) / 2;
     move(left, top);
+}
+
+// A short fade-in of the page that was just shown, unless the user
+// asked for reduced motion.
+void MainWindow::fadeInPage(QWidget *page)
+{
+    if (fadingPage != nullptr) {
+        fadingPage->setGraphicsEffect(nullptr);   // end an unfinished fade at once
+        fadingPage = nullptr;
+    }
+    if (isReducedMotion() || !isVisible()) {
+        return;
+    }
+
+    QGraphicsOpacityEffect *effect = new QGraphicsOpacityEffect(page);
+    page->setGraphicsEffect(effect);   // the page now owns the effect
+    fadingPage = page;
+    pageFade->setTargetObject(effect);
+    pageFade->start();
+}
+
+void MainWindow::onPageFadeFinished()
+{
+    // Removing the effect deletes it, and the page is drawn normally again.
+    if (fadingPage != nullptr) {
+        fadingPage->setGraphicsEffect(nullptr);
+        fadingPage = nullptr;
+    }
 }
