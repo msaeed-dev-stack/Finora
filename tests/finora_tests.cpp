@@ -12,10 +12,13 @@
 
 #include "core/AccountRules.h"
 #include "core/Budget.h"
+#include "core/CsvExport.h"
 #include "core/Greeting.h"
 #include "core/Money.h"
 #include "core/PasswordPolicy.h"
+#include "core/Plans.h"
 #include "core/Session.h"
+#include "core/Subscription.h"
 #include "core/Totals.h"
 #include "core/Transaction.h"
 #include "core/TransactionFilter.h"
@@ -701,6 +704,303 @@ void testAccountRules(TestCounter &counter)
     checkBool(counter, "a new Session is signed out, with user id 0", !nobody.isSignedIn() && nobody.userId() == 0, true);
 }
 
+// ---- Milestone 4, Phase 4C: plans, entitlements and the lifecycle ----
+
+void testPlansAndEntitlements(TestCounter &counter)
+{
+    checkInt(counter, "there are 4 plans", PLAN_COUNT, 4);
+    checkText(counter, "the code of Free is \"free\"", planCode(PLAN_FREE), "free");
+    checkText(counter, "the code of Business is \"business\"", planCode(PLAN_BUSINESS), "business");
+    PlanId found = PLAN_FREE;
+    checkBool(counter, "the code \"pro\" finds Finora Pro", planFromCode("pro", found) && found == PLAN_PRO, true);
+    checkBool(counter, "an unknown code is refused", planFromCode("gold", found), false);
+    checkBool(counter, "codes are exact: \"PRO\" is refused", planFromCode("PRO", found), false);
+    checkText(counter, "the name of Pro", planName(PLAN_PRO), "Finora Pro");
+
+    checkAmount(counter, "Free costs 0 cents", PLANS[PLAN_FREE].priceMinor, 0);
+    checkAmount(counter, "Plus costs 599 cents a month", PLANS[PLAN_PLUS].priceMinor, 599);
+    checkAmount(counter, "Pro costs 1299 cents a month", PLANS[PLAN_PRO].priceMinor, 1299);
+    checkAmount(counter, "Business costs 2499 cents a month", PLANS[PLAN_BUSINESS].priceMinor, 2499);
+    checkText(counter, "the price text of Free", formatPlanPrice(PLAN_FREE), "$0");
+    checkText(counter, "the price text of Pro", formatPlanPrice(PLAN_PRO), "$12.99");
+    bool rising = true;
+    for (int i = 1; i < PLAN_COUNT; i++) {
+        if (PLANS[i].priceMinor <= PLANS[i - 1].priceMinor) {
+            rising = false;
+        }
+    }
+    checkBool(counter, "every larger plan costs more than the one before", rising, true);
+
+    checkInt(counter, "Free allows 3 active budgets", activeBudgetLimit(PLAN_FREE), 3);
+    checkInt(counter, "Plus has no budget limit", activeBudgetLimit(PLAN_PLUS), UNLIMITED_BUDGETS);
+    checkInt(counter, "Business has no budget limit", activeBudgetLimit(PLAN_BUSINESS), UNLIMITED_BUDGETS);
+    checkBool(counter, "Free includes transactions", planIncludes(PLAN_FREE, FEATURE_TRANSACTIONS), true);
+    checkBool(counter, "Free does not include CSV exports", planIncludes(PLAN_FREE, FEATURE_CSV_EXPORT), false);
+    checkBool(counter, "Plus includes CSV exports", planIncludes(PLAN_PLUS, FEATURE_CSV_EXPORT), true);
+    checkBool(counter, "Plus does not include PDF reports", planIncludes(PLAN_PLUS, FEATURE_PDF_REPORTS), false);
+    checkBool(counter, "Pro includes PDF reports", planIncludes(PLAN_PRO, FEATURE_PDF_REPORTS), true);
+    checkBool(counter, "Pro does not include the audit history", planIncludes(PLAN_PRO, FEATURE_AUDIT_HISTORY), false);
+    checkBool(counter, "Business includes the audit history", planIncludes(PLAN_BUSINESS, FEATURE_AUDIT_HISTORY), true);
+
+    // Every plan includes everything of every smaller plan, and every
+    // plan brings exactly 7 features of its own.
+    bool nested = true;
+    int ownFeatures[PLAN_COUNT] = {0, 0, 0, 0};
+    for (int f = 0; f < FEATURE_COUNT; f++) {
+        ownFeatures[FEATURES[f].lowestPlan]++;
+        for (int p = 1; p < PLAN_COUNT; p++) {
+            Feature feature = static_cast<Feature>(f);
+            if (planIncludes(static_cast<PlanId>(p - 1), feature) && !planIncludes(static_cast<PlanId>(p), feature)) {
+                nested = false;
+            }
+        }
+    }
+    checkBool(counter, "every plan includes all features of the smaller plans", nested, true);
+    checkBool(counter, "each plan brings 7 features of its own (28 in total)",
+              ownFeatures[0] == 7 && ownFeatures[1] == 7 && ownFeatures[2] == 7 && ownFeatures[3] == 7, true);
+
+    // Honest labels: nothing unbuilt is presented as working.
+    bool freeAllBuilt = true;
+    for (int f = 0; f < FEATURE_COUNT; f++) {
+        if (FEATURES[f].lowestPlan == PLAN_FREE && FEATURES[f].state != FEATURE_AVAILABLE) {
+            freeAllBuilt = false;
+        }
+    }
+    checkBool(counter, "every Free feature is built and available", freeAllBuilt, true);
+    checkBool(counter, "unlimited budgets are available on Plus", featureAvailable(FEATURE_UNLIMITED_BUDGETS), true);
+    checkBool(counter, "savings goals are marked as planned, not available", featureAvailable(FEATURE_SAVINGS_GOALS), false);
+    checkBool(counter, "team members, shared workspaces, roles and team reports need Finora Online",
+              FEATURES[FEATURE_TEAM_MEMBERS].state == FEATURE_NEEDS_ONLINE
+                  && FEATURES[FEATURE_SHARED_WORKSPACES].state == FEATURE_NEEDS_ONLINE
+                  && FEATURES[FEATURE_ROLES].state == FEATURE_NEEDS_ONLINE
+                  && FEATURES[FEATURE_TEAM_REPORTS].state == FEATURE_NEEDS_ONLINE, true);
+
+    checkText(counter, "the message for a feature of a larger plan",
+              lockedFeatureMessage(FEATURE_UNLIMITED_BUDGETS, PLAN_FREE),
+              "\"Unlimited active budgets\" is part of Finora Plus. Your plan: Finora Free.");
+    checkText(counter, "the message for a planned feature",
+              lockedFeatureMessage(FEATURE_SAVINGS_GOALS, PLAN_PLUS),
+              "\"Savings goals\" is planned and not available in this version of Finora yet.");
+    checkText(counter, "the message for a team feature",
+              lockedFeatureMessage(FEATURE_TEAM_MEMBERS, PLAN_BUSINESS),
+              "\"Team members\" will need Finora Online, which is planned. "
+              "It is not available in this desktop version.");
+    checkText(counter, "the message when the Free budget limit is reached", budgetLimitMessage(PLAN_FREE),
+              "Finora Free includes 3 active budgets. Upgrade to Finora Plus for unlimited budgets, "
+              "or delete a budget to make room.");
+}
+
+// A subscription for the lifecycle tests: renews on 30 November 2026 at
+// 10:00 UTC, and its access ends 7 days later without payment.
+Subscription activeSubscription(PlanId plan)
+{
+    Subscription subscription;
+    subscription.id = 1;
+    subscription.plan = plan;
+    subscription.status = STATUS_ACTIVE;
+    subscription.startedAt = "2026-10-30T10:00:00Z";
+    subscription.renewsAt = "2026-11-30T10:00:00Z";
+    subscription.expiresAt = "2026-12-07T10:00:00Z";
+    return subscription;
+}
+
+void testSubscriptionLifecycle(TestCounter &counter)
+{
+    SubscriptionStatus status = STATUS_FREE;
+    checkBool(counter, "the status code \"past_due\" finds Past due",
+              statusFromCode(statusCode(STATUS_PAST_DUE), status) && status == STATUS_PAST_DUE, true);
+    checkBool(counter, "an unknown status code is refused", statusFromCode("paused", status), false);
+    checkText(counter, "status names are words for the screen", statusName(STATUS_PAST_DUE), "Past due");
+    checkBool(counter, "UTC times compare as text: 09:00 is before 10:00",
+              std::string("2026-11-30T09:00:00Z") < std::string("2026-11-30T10:00:00Z"), true);
+
+    Subscription free;
+    checkBool(counter, "Free stays Free at any time", subscriptionAt(free, "2099-01-01T00:00:00Z").status == STATUS_FREE,
+              true);
+
+    Subscription plus = activeSubscription(PLAN_PLUS);
+    checkBool(counter, "one second before the renewal date, Plus is still active",
+              subscriptionAt(plus, "2026-11-30T09:59:59Z").status == STATUS_ACTIVE, true);
+    checkBool(counter, "at the renewal date, an unpaid renewal makes it past due",
+              subscriptionAt(plus, "2026-11-30T10:00:00Z").status == STATUS_PAST_DUE, true);
+    checkBool(counter, "during the 7 days of grace, Plus features stay",
+              planAt(plus, "2026-12-07T09:59:59Z") == PLAN_PLUS, true);
+    Subscription ended = subscriptionAt(plus, "2026-12-07T10:00:00Z");
+    checkBool(counter, "when the grace ends unpaid, it expires and Free applies",
+              ended.status == STATUS_EXPIRED && ended.plan == PLAN_FREE && ended.renewsAt.empty(), true);
+    checkBool(counter, "months later, both deadlines are applied at once",
+              subscriptionAt(plus, "2027-03-01T00:00:00Z").status == STATUS_EXPIRED, true);
+
+    Subscription downgrading = activeSubscription(PLAN_PRO);
+    downgrading.hasScheduledPlan = true;
+    downgrading.scheduledPlan = PLAN_PLUS;
+    checkBool(counter, "before the renewal date, Pro is still used", planAt(downgrading, "2026-11-29T00:00:00Z") == PLAN_PRO,
+              true);
+    Subscription switched = subscriptionAt(downgrading, "2026-11-30T10:00:00Z");
+    checkBool(counter, "a smaller plan chosen earlier starts at the renewal date",
+              switched.plan == PLAN_PLUS && switched.status == STATUS_PAST_DUE && !switched.hasScheduledPlan, true);
+
+    Subscription trial;
+    trial.plan = PLAN_PRO;
+    trial.status = STATUS_TRIAL;
+    trial.expiresAt = "2026-11-14T08:00:00Z";
+    trial.trialUsed = true;
+    checkBool(counter, "during the trial, Pro features may be used", planAt(trial, "2026-11-14T07:59:59Z") == PLAN_PRO, true);
+    checkBool(counter, "when the trial ends, it expires and Free applies",
+              subscriptionAt(trial, "2026-11-14T08:00:00Z").status == STATUS_EXPIRED
+                  && planAt(trial, "2026-11-14T08:00:00Z") == PLAN_FREE, true);
+    checkBool(counter, "an expired trial still remembers that the trial was used",
+              subscriptionAt(trial, "2026-12-01T00:00:00Z").trialUsed, true);
+
+    Subscription cancelled = activeSubscription(PLAN_PRO);
+    cancelled.status = STATUS_CANCELLED;
+    cancelled.renewsAt = "";
+    cancelled.expiresAt = "2026-11-30T10:00:00Z";
+    checkBool(counter, "a cancelled plan keeps its features until the paid period ends",
+              planAt(cancelled, "2026-11-30T09:59:59Z") == PLAN_PRO, true);
+    checkBool(counter, "then it expires, without a grace period", planAt(cancelled, "2026-11-30T10:00:00Z") == PLAN_FREE,
+              true);
+}
+
+void testPlanChanges(TestCounter &counter)
+{
+    Subscription free;
+    checkBool(counter, "Free to Plus: a new subscription, paid now", planChangeFor(free, PLAN_PLUS) == CHANGE_SUBSCRIBE,
+              true);
+    checkBool(counter, "Free to Free: nothing to do", planChangeFor(free, PLAN_FREE) == CHANGE_NONE, true);
+
+    Subscription plus = activeSubscription(PLAN_PLUS);
+    checkBool(counter, "Plus to Pro: an upgrade, paid now", planChangeFor(plus, PLAN_PRO) == CHANGE_UPGRADE, true);
+
+    Subscription pro = activeSubscription(PLAN_PRO);
+    checkBool(counter, "Pro to Plus: waits for the renewal date, nothing paid now",
+              planChangeFor(pro, PLAN_PLUS) == CHANGE_DOWNGRADE, true);
+    checkBool(counter, "Pro to Free: cancels at the end of the period", planChangeFor(pro, PLAN_FREE) == CHANGE_CANCEL,
+              true);
+    checkBool(counter, "Pro to Pro: nothing to do", planChangeFor(pro, PLAN_PRO) == CHANGE_NONE, true);
+    pro.hasScheduledPlan = true;
+    pro.scheduledPlan = PLAN_PLUS;
+    checkBool(counter, "with Plus already arranged, choosing Plus again changes nothing",
+              planChangeFor(pro, PLAN_PLUS) == CHANGE_NONE, true);
+    checkBool(counter, "with Plus arranged, choosing Pro keeps Pro", planChangeFor(pro, PLAN_PRO) == CHANGE_RESUME, true);
+
+    Subscription cancelled = activeSubscription(PLAN_PRO);
+    cancelled.status = STATUS_CANCELLED;
+    checkBool(counter, "a cancelled Pro can be resumed without paying again",
+              planChangeFor(cancelled, PLAN_PRO) == CHANGE_RESUME, true);
+    checkBool(counter, "a cancelled plan already ends: choosing Free changes nothing",
+              planChangeFor(cancelled, PLAN_FREE) == CHANGE_NONE, true);
+
+    Subscription pastDue = activeSubscription(PLAN_PLUS);
+    pastDue.status = STATUS_PAST_DUE;
+    checkBool(counter, "past due on Plus: paying for Plus is a renewal", planChangeFor(pastDue, PLAN_PLUS) == CHANGE_RENEW,
+              true);
+    checkBool(counter, "past due: choosing Free stops at once", planChangeFor(pastDue, PLAN_FREE) == CHANGE_CANCEL, true);
+
+    Subscription trial;
+    trial.plan = PLAN_PRO;
+    trial.status = STATUS_TRIAL;
+    checkBool(counter, "during the trial, paying for Pro is a new subscription",
+              planChangeFor(trial, PLAN_PRO) == CHANGE_SUBSCRIBE, true);
+    checkBool(counter, "during the trial, choosing Free ends the trial at once",
+              planChangeFor(trial, PLAN_FREE) == CHANGE_CANCEL, true);
+
+    checkBool(counter, "only subscribe, upgrade and renew need a payment",
+              changeNeedsPayment(CHANGE_SUBSCRIBE) && changeNeedsPayment(CHANGE_UPGRADE) && changeNeedsPayment(CHANGE_RENEW)
+                  && !changeNeedsPayment(CHANGE_DOWNGRADE) && !changeNeedsPayment(CHANGE_CANCEL)
+                  && !changeNeedsPayment(CHANGE_RESUME) && !changeNeedsPayment(CHANGE_NONE), true);
+    checkText(counter, "the payment reason of an upgrade", paymentReasonFor(CHANGE_UPGRADE), "upgrade");
+    checkText(counter, "the payment reason of a renewal", paymentReasonFor(CHANGE_RENEW), "renewal");
+    checkText(counter, "the payment reason of a new subscription", paymentReasonFor(CHANGE_SUBSCRIBE), "new");
+
+    checkBool(counter, "the Pro trial may start on Free", canStartTrial(free), true);
+    Subscription afterTrial;
+    afterTrial.status = STATUS_EXPIRED;
+    afterTrial.trialUsed = true;
+    checkBool(counter, "the trial cannot start a second time", canStartTrial(afterTrial), false);
+    checkBool(counter, "the trial cannot start while a plan is paid", canStartTrial(plus), false);
+}
+
+void testPausedBudgets(TestCounter &counter)
+{
+    // Five budgets in the order the page shows them (by category), not
+    // in the order they were created (by id).
+    int ids[5] = {7, 2, 9, 4, 1};
+    std::vector<Budget> budgets;
+    for (int i = 0; i < 5; i++) {
+        Budget budget;
+        budget.id = ids[i];
+        budgets.push_back(budget);
+    }
+    markPausedBudgets(budgets, 3);
+    checkBool(counter, "on Free, the 3 oldest budgets (ids 1, 2 and 4) stay active",
+              !budgets[4].paused && !budgets[1].paused && !budgets[3].paused, true);
+    checkBool(counter, "the 2 newer budgets (ids 7 and 9) are paused", budgets[0].paused && budgets[2].paused, true);
+    checkBool(counter, "2 budgets are paused and all 5 are kept",
+              countPausedBudgets(budgets) == 2 && budgets.size() == 5, true);
+
+    markPausedBudgets(budgets, UNLIMITED_BUDGETS);
+    checkInt(counter, "with no limit, no budget is paused", countPausedBudgets(budgets), 0);
+
+    budgets.erase(budgets.begin() + 1);   // delete the budget with id 2
+    markPausedBudgets(budgets, 3);
+    checkBool(counter, "after deleting an active budget, the next oldest (id 7) becomes active",
+              !budgets[0].paused && budgets[1].paused, true);
+
+    std::vector<Budget> exactlyThree(3);
+    for (int i = 0; i < 3; i++) {
+        exactlyThree[i].id = i + 1;
+    }
+    markPausedBudgets(exactlyThree, 3);
+    checkInt(counter, "exactly 3 budgets on Free: none is paused", countPausedBudgets(exactlyThree), 0);
+}
+
+void testCsvExport(TestCounter &counter)
+{
+    checkBool(counter, "CSV exports, PDF reports and the audit history are built in this version",
+              featureAvailable(FEATURE_CSV_EXPORT) && featureAvailable(FEATURE_PDF_REPORTS)
+                  && featureAvailable(FEATURE_AUDIT_HISTORY), true);
+
+    checkText(counter, "a plain CSV field stays as it is", csvField("Food"), "Food");
+    checkText(counter, "a field with a comma is put in quotes", csvField("Rent, October"), "\"Rent, October\"");
+    checkText(counter, "quotes inside a field are doubled", csvField("Ali \"Bhai\""), "\"Ali \"\"Bhai\"\"\"");
+    checkText(counter, "a field with a line break is put in quotes", csvField("two\nlines"), "\"two\nlines\"");
+    checkText(counter, "a formula is made harmless: =SUM(A1:A9) gets a ' in front", csvField("=SUM(A1:A9)"),
+              "'=SUM(A1:A9)");
+    checkText(counter, "+, - and @ at the start are made harmless too",
+              csvField("+92 300") + csvField("-5") + csvField("@home"), "'+92 300'-5'@home");
+    checkText(counter, "a formula with commas gets both the ' and the quotes",
+              csvField("=HYPERLINK(\"x\",\"y\")"), "\"'=HYPERLINK(\"\"x\"\",\"\"y\"\")\"");
+    checkText(counter, "an empty field stays empty", csvField(""), "");
+    checkText(counter, "a formula after leading spaces is made harmless too", csvField("  =SUM(A1:A9)"),
+              "'  =SUM(A1:A9)");
+    checkText(counter, "a field starting with a tab is made harmless", csvField("\t@cmd"), "'\t@cmd");
+    checkText(counter, "a field starting with a line feed gets the ' and quotes", csvField("\n=1+1"),
+              "\"'\n=1+1\"");
+    checkText(counter, "a field starting with a carriage return gets the ' and quotes", csvField("\r+1"),
+              "\"'\r+1\"");
+    checkText(counter, "= + - @ later in the text are harmless and stay as they are",
+              csvField("Rent - October") + "|" + csvField("ali@example.com"), "Rent - October|ali@example.com");
+
+    checkText(counter, "amounts are plain numbers: 120050 gives 1200.50", plainAmount(120050), "1200.50");
+    checkText(counter, "5 minor units give 0.05", plainAmount(5), "0.05");
+    checkText(counter, "the largest amount has no thousands separators", plainAmount(MAX_AMOUNT_MINOR), "9999999999.99");
+
+    std::vector<Transaction> list(1);
+    list[0].date = "2026-10-28";
+    list[0].type = TYPE_EXPENSE;
+    list[0].category = "Food";
+    list[0].description = "Groceries, Ali's shop";
+    list[0].currencyCode = "PKR";
+    list[0].amountMinor = 120050;
+    checkText(counter, "a CSV file is a header line and one line per transaction, each ending with \\r\\n",
+              transactionsCsv(list),
+              "Date,Type,Category,Description,Currency,Amount\r\n"
+              "2026-10-28,expense,Food,\"Groceries, Ali's shop\",PKR,1200.50\r\n");
+    checkText(counter, "without transactions the file has only the header", transactionsCsv(std::vector<Transaction>()),
+              "Date,Type,Category,Description,Currency,Amount\r\n");
+}
+
 int main()
 {
     TestCounter counter;
@@ -729,6 +1029,13 @@ int main()
     std::cout << "---- Milestone 4, Phase 4B: passwords and accounts ----\n";
     testPasswordPolicy(counter);
     testAccountRules(counter);
+
+    std::cout << "---- Milestone 4, Phase 4C: plans and subscriptions ----\n";
+    testPlansAndEntitlements(counter);
+    testSubscriptionLifecycle(counter);
+    testPlanChanges(counter);
+    testPausedBudgets(counter);
+    testCsvExport(counter);
 
     std::cout << "-----------------\n";
     std::cout << counter.checksRun << " checks, " << counter.checksFailed << " failed\n";

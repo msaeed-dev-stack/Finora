@@ -23,7 +23,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ---- Qt 6: Widgets gives us windows, buttons and layouts, Sql gives ----
 # ---- database access (used only by finora_database), and Svg draws  ----
 # ---- the icons in the colours of the current theme.                 ----
-find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Sql Svg)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Sql Svg Gui)
 
 # Turns on Qt's code generators: moc (for signals and slots) and
 # rcc (for icons and style sheets that are built into the program).
@@ -50,6 +50,9 @@ add_library(finora_core STATIC
     src/core/PasswordPolicy.h src/core/PasswordPolicy.cpp
     src/core/AccountRules.h   src/core/AccountRules.cpp
     src/core/Session.h        src/core/Session.cpp
+    src/core/Plans.h          src/core/Plans.cpp
+    src/core/Subscription.h   src/core/Subscription.cpp
+    src/core/CsvExport.h      src/core/CsvExport.cpp
 )
 target_include_directories(finora_core PUBLIC src)
 target_compile_options(finora_core PRIVATE ${FINORA_WARNINGS})
@@ -59,7 +62,8 @@ target_compile_options(finora_core PRIVATE ${FINORA_WARNINGS})
 #     together with the lock that lets only one copy of Finora use
 #     the database at a time.
 #     Qt SQL is linked PRIVATE: code that uses this library does not
-#     see any SQL classes, only DatabaseManager, BudgetStore, UserStore and InstanceLock.
+#     see any SQL classes, only DatabaseManager, BudgetStore, UserStore,
+#     SubscriptionStore and InstanceLock.
 # =====================================================================
 add_library(finora_database STATIC
     src/database/DatabaseManager.h
@@ -70,6 +74,8 @@ add_library(finora_database STATIC
     src/database/BudgetStore.cpp
     src/database/UserStore.h
     src/database/UserStore.cpp
+    src/database/SubscriptionStore.h
+    src/database/SubscriptionStore.cpp
 )
 target_include_directories(finora_database PUBLIC src)
 target_link_libraries(finora_database
@@ -114,6 +120,33 @@ target_link_libraries(finora_auth
 target_compile_options(finora_auth PRIVATE ${FINORA_WARNINGS})
 
 # =====================================================================
+#  2c. finora_billing - subscriptions (Phase 4C): the payment gateway
+#      interface, the SIMULATED gateway (no real money, no secret keys,
+#      no card details) and the subscription lifecycle.
+# =====================================================================
+add_library(finora_billing STATIC
+    src/billing/PaymentGateway.h
+    src/billing/SimulatedPaymentGateway.h  src/billing/SimulatedPaymentGateway.cpp
+    src/billing/SubscriptionService.h      src/billing/SubscriptionService.cpp
+)
+target_include_directories(finora_billing PUBLIC src)
+target_link_libraries(finora_billing PUBLIC finora_database finora_core Qt6::Core)
+target_compile_options(finora_billing PRIVATE ${FINORA_WARNINGS})
+
+# =====================================================================
+#  2d. finora_reports - files made from a person's records (Phase 4C):
+#      the CSV export (Finora Plus) and the monthly PDF summary (Finora
+#      Pro). QPdfWriter and QTextDocument are part of Qt GUI, which
+#      Finora already uses, so no new library is needed.
+# =====================================================================
+add_library(finora_reports STATIC
+    src/reports/ReportExporter.h  src/reports/ReportExporter.cpp
+)
+target_include_directories(finora_reports PUBLIC src)
+target_link_libraries(finora_reports PUBLIC finora_database finora_core Qt6::Gui)
+target_compile_options(finora_reports PRIVATE ${FINORA_WARNINGS})
+
+# =====================================================================
 #  3. Finora - the desktop application
 # =====================================================================
 
@@ -142,6 +175,9 @@ set(FINORA_UI_SOURCES
     src/ui/AuthWindow.h       src/ui/AuthWindow.cpp
     src/ui/AccountDialogs.h   src/ui/AccountDialogs.cpp
     src/ui/AppController.h    src/ui/AppController.cpp
+    src/ui/SubscriptionPage.h src/ui/SubscriptionPage.cpp
+    src/ui/CheckoutDialog.h   src/ui/CheckoutDialog.cpp
+    src/ui/AuditHistoryDialog.h  src/ui/AuditHistoryDialog.cpp
 )
 
 # Icons, fonts (with their licences) and the style sheet. They are built
@@ -158,7 +194,8 @@ set(FINORA_RESOURCE_FILES
     resources/icons/check_circle.svg   resources/icons/check_white.svg
     resources/icons/moon.svg           resources/icons/sun.svg
     resources/icons/eye.svg            resources/icons/eye_off.svg
-    resources/icons/log_out.svg
+    resources/icons/log_out.svg        resources/icons/subscription.svg
+    resources/icons/lock.svg
     resources/fonts/Inter-Regular.ttf  resources/fonts/Inter-Medium.ttf
     resources/fonts/Inter-SemiBold.ttf resources/fonts/Inter-Bold.ttf
     resources/fonts/Inter-OFL.txt
@@ -183,7 +220,8 @@ qt_add_resources(Finora "finora_licences"
     FILES third_party/libsodium-1.0.22/LICENSE
 )
 target_include_directories(Finora PRIVATE src)
-target_link_libraries(Finora PRIVATE finora_core finora_database finora_auth Qt6::Widgets Qt6::Svg)
+target_link_libraries(Finora PRIVATE finora_core finora_database finora_auth finora_billing finora_reports
+                                     Qt6::Widgets Qt6::Svg)
 target_compile_options(Finora PRIVATE ${FINORA_WARNINGS})
 # The version number above is passed to the C++ code as FINORA_VERSION.
 target_compile_definitions(Finora PRIVATE FINORA_VERSION="${PROJECT_VERSION}")
@@ -245,7 +283,8 @@ qt_add_resources(finora_ui_tests "finora_ui_test_licences"
     FILES third_party/libsodium-1.0.22/LICENSE
 )
 target_include_directories(finora_ui_tests PRIVATE src)
-target_link_libraries(finora_ui_tests PRIVATE finora_core finora_database finora_auth Qt6::Widgets Qt6::Svg)
+target_link_libraries(finora_ui_tests PRIVATE finora_core finora_database finora_auth finora_billing
+                                              finora_reports Qt6::Widgets Qt6::Svg)
 target_compile_options(finora_ui_tests PRIVATE ${FINORA_WARNINGS})
 target_compile_definitions(finora_ui_tests PRIVATE FINORA_VERSION="${PROJECT_VERSION}")
 finora_copy_sodium_dll(finora_ui_tests)
@@ -276,3 +315,18 @@ add_test(NAME auth_tests COMMAND finora_auth_tests)
 set_tests_properties(auth_tests PROPERTIES
     TIMEOUT 300
     ENVIRONMENT "QT_PLUGIN_PATH=${FINORA_QT_PLUGINS_DIR}")
+
+# 4e. Subscription and billing tests (Phase 4C): the upgrade to schema
+#     version 3, plans, entitlements, the simulated checkout and the
+#     billing history, on real SQLite files in a temporary folder.
+add_executable(finora_billing_tests tests/finora_billing_tests.cpp)
+target_link_libraries(finora_billing_tests PRIVATE finora_billing finora_reports finora_auth finora_database
+                                                   finora_core Qt6::Core Qt6::Gui Qt6::Sql)
+target_compile_options(finora_billing_tests PRIVATE ${FINORA_WARNINGS})
+finora_copy_sodium_dll(finora_billing_tests)
+add_test(NAME billing_tests COMMAND finora_billing_tests)
+# The PDF test needs fonts, so the program is a QGuiApplication; "offscreen"
+# lets it run without a screen.
+set_tests_properties(billing_tests PROPERTIES
+    TIMEOUT 300
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${FINORA_QT_PLUGINS_DIR}")

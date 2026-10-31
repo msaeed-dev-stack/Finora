@@ -21,8 +21,9 @@ const int PAGE_BUDGETS      = 2;
 const int PAGE_GOALS        = 3;
 const int PAGE_REPORTS      = 4;
 const int PAGE_CURRENCY     = 5;
-const int PAGE_SETTINGS     = 6;
-const int PAGE_COUNT        = 7;   // total number of pages
+const int PAGE_SUBSCRIPTION = 6;   // Phase 4C: plans and billing
+const int PAGE_SETTINGS     = 7;
+const int PAGE_COUNT        = 8;   // total number of pages
 
 // Shows the Finora logo, one button for each page and the theme switch.
 // When the user clicks a page button, the sidebar sends the signal
@@ -44,6 +45,10 @@ public:
     // Shows who is signed in, with a Sign out button, at the bottom.
     void showAccount(const QString &displayName, const QString &email);
 
+    // Shows the person's plan under the name, for example "Finora Free",
+    // coloured by `tone`. Clicking it opens the Subscription page.
+    void showPlan(const QString &text, const QString &tone);
+
 signals:
     // Sent when the user clicks one of the navigation buttons.
     void pageSelected(int pageNumber);
@@ -58,6 +63,9 @@ private slots:
     // Runs when a navigation button is clicked.
     void onNavButtonClicked(int pageNumber);
 
+    // Runs when the plan under the name is clicked.
+    void onPlanClicked();
+
 private:
     QWidget *createBrandArea();
     void createNavButtons(QVBoxLayout *layout);
@@ -70,6 +78,7 @@ private:
     QLabel *avatarLabel = nullptr;
     QLabel *accountNameLabel = nullptr;
     QLabel *accountEmailLabel = nullptr;
+    QPushButton *planButton = nullptr;    // hidden until showPlan()
     QPushButton *signOutButton = nullptr;
 };
 

@@ -16,6 +16,7 @@ BudgetStore::BudgetStore(DatabaseManager &sharedDatabase)
 bool BudgetStore::addBudget(Budget &budget)
 {
     errorMessage.clear();
+    limitReached = false;
     if (!database.isOpen()) {
         return fail("The database is not open.");
     }
@@ -32,6 +33,20 @@ bool BudgetStore::addBudget(Budget &budget)
     QVariant owner;
     if (!database.currentOwner(owner)) {
         return fail(database.lastError());
+    }
+
+    // The plan decides how many budgets may exist (Phase 4C). This check
+    // is here, below every screen, so no screen can skip it.
+    int limit = database.budgetLimit();
+    if (limit != UNLIMITED_BUDGETS) {
+        int existing = 0;
+        if (!countBudgets(owner, existing)) {
+            return false;
+        }
+        if (existing >= limit) {
+            limitReached = true;
+            return fail(QString::fromStdString(budgetLimitMessage(database.currentPlan())));
+        }
     }
 
     QSqlQuery query(QSqlDatabase::database(database.sqlConnectionName(), false));
@@ -82,6 +97,10 @@ bool BudgetStore::loadBudgets(std::vector<Budget> &results)
         budget.limitMinor = query.value(3).toLongLong();
         results.push_back(budget);
     }
+
+    // Budgets over the plan's limit are paused, not deleted (Phase 4C).
+    // Every screen loads budgets here, so every screen sees the same rule.
+    markPausedBudgets(results, database.budgetLimit());
     return true;
 }
 
@@ -170,6 +189,24 @@ QString BudgetStore::lastError() const
 // Refuses a second budget for the same category (in any upper or lower
 // case) and currency. The budget being edited (same id) does not count.
 // The database has a UNIQUE index with the same rule as a second guard.
+bool BudgetStore::planLimitReached() const
+{
+    return limitReached;
+}
+
+// How many budgets this owner has, active or paused.
+bool BudgetStore::countBudgets(const QVariant &owner, int &count)
+{
+    QSqlQuery query(QSqlDatabase::database(database.sqlConnectionName(), false));
+    query.prepare("SELECT COUNT(*) FROM budgets WHERE user_id IS :owner");
+    query.bindValue(":owner", owner);
+    if (!query.exec() || !query.next()) {
+        return fail("Could not count the budgets: " + query.lastError().text());
+    }
+    count = query.value(0).toInt();
+    return true;
+}
+
 bool BudgetStore::checkNoDuplicate(const Budget &budget)
 {
     QVariant owner;

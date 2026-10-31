@@ -2,11 +2,11 @@
 
 A 12-minute script for showing Phase 4A to classmates or to the instructor: the dashboard, budgets, the light and dark themes, and the safe database upgrade. Each step says what to do, what the audience should see, and what to say.
 
-Phase 4B (accounts) is described at the end of this guide. Phase 4C (subscription plans) is **planned and not yet implemented**. Do not show or describe it as working.
+Phase 4B (accounts) and Phase 4C (subscription plans) are described at the end of this guide. In Phase 4C, every payment is **simulated**: say so every time, and never describe it as a real payment. Business team features are planned and need Finora Online; do not show them as working.
 
 ## Before the demonstration
 
-1. Run `build.bat` and check that the last lines say **100% tests passed, 0 tests failed out of 3**.
+1. Run `build.bat` and check that the last lines say **100% tests passed, 0 tests failed out of 5**.
 2. Close every Finora window. Only one copy can run at a time.
 3. Decide which database to show:
    - **To show the upgrade:** keep your Milestone 3 `finora.db`. The first start of the new Finora will ask to upgrade it (step 1).
@@ -53,6 +53,33 @@ Finora now starts with the sign-in window. If this computer has no account yet, 
 | B10 | Open **Settings** | Profile, Security (codes left, session limits) | "Finora signs out after 15 minutes without activity and after 12 hours." |
 
 What to show in the code for Phase 4B: `Session.h` (the friend class), `AuthService::signIn` (the general message and the dummy hash), `DatabaseManager::currentOwner`, and `third_party/libsodium-1.0.22/VERIFICATION.md`.
+
+## Phase 4C: subscription plans (about 8 minutes)
+
+Start Finora as `Finora.exe --billing-demo` (for example from a command prompt in the `build\release` folder), so that the Subscription page offers the demonstration button. Sign in with a demonstration account on Finora Free that has 3 budgets.
+
+| # | Do this | The audience sees | Say this |
+|---|---|---|---|
+| C1 | Point at the plan under the name in the sidebar | "Finora Free" | "Every account starts on Free. The plan comes from the database, never from the screen." |
+| C2 | Click **Subscription** | The banner "Simulated billing: Finora collects no card details and never charges real money", your plan, "3 of 3" active budgets, four plan cards | "Payments here are simulated: no card details, no keys, no money." |
+| C3 | Point at a card's feature list | Green ticks only for built features; "Soon" and "Online" for the others | "Finora never pretends that a feature works. Team features need a server." |
+| C4 | Click **Show the comparison** | 27 rows by 4 plans | "One table in `Plans.h` decides everything on this page and every check in the program." |
+| C5 | Go to **Budgets** and click **+ New Budget** | "Budget limit reached ... Upgrade to Finora Plus", with "See plans" and "Not now" | "The real check is inside `BudgetStore`. This box only saves a wasted form." |
+| C6 | Click **See plans**, then **Choose Plus** | The checkout: plan, price, period, the simulated banner, and no text field | "There is nowhere to type a card number." |
+| C7 | Click **Simulate a declined payment** | "The simulated payment was declined. No money was moved. Your plan has not changed." | "The attempt is recorded, and the plan does not change." |
+| C8 | Click **Confirm simulated payment of $5.99** | "You are on Finora Plus. Simulated payment SIM-..."; the history shows both attempts; the sidebar says "Finora Plus" | "The plan switched on only because a succeeded payment of this person for this plan exists: a guard in the SQL." |
+| C9 | Add two more budgets; then **Transactions** > **Export CSV** | The file is saved | "CSV export is part of Plus. A field that starts with = gets a ' in front, so a spreadsheet never runs it." |
+| C10 | **Subscription** > **Cancel subscription**, and confirm | "Plus · ends ..." | "Cancelled, but Plus stays until the paid month ends." |
+| C11 | Click **Demo: end this period now** | Finora Free again; on **Budgets**, two cards say "Paused on Finora Free" | "Nothing is deleted. The 3 oldest budgets stay active; after an upgrade, all of them are active again." |
+| C12 | Click **Try Pro free for 14 days**; then **Dashboard** > **PDF summary** | "Pro trial" in the sidebar; a PDF of the month | "One trial per account, with no payment. The PDF is made with Qt's own `QPdfWriter`." |
+
+What to show in the code for Phase 4C:
+- `src/core/Plans.h` (the `FEATURES` table);
+- `subscriptionAt` in `src/core/Subscription.cpp`;
+- `src/billing/PaymentGateway.h` (an abstract class);
+- `SubscriptionStore::activatePaidPlan` (the `EXISTS` guard);
+- `BudgetStore::addBudget` (the limit);
+- `docs/DESIGN.md`, section 12.
 
 ## What to show in the code
 

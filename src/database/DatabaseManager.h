@@ -15,6 +15,7 @@
 
 #include <vector>
 
+#include "core/Plans.h"
 #include "core/Session.h"
 #include "core/Transaction.h"
 
@@ -22,7 +23,15 @@
 //   1  Milestone 2: currencies and transactions
 //   2  Milestone 4: budgets, settings, the account tables used from
 //      Phase 4B, and an owner, a unique id and timestamps for every transaction
-const int CURRENT_SCHEMA_VERSION = 2;
+//   3  Milestone 4, Phase 4C: subscriptions and the billing history (payments)
+const int CURRENT_SCHEMA_VERSION = 3;
+
+// One line of an account's audit history (Phase 4C: shown on Finora Business).
+struct AuditEvent {
+    std::string eventType;   // for example "plan_activated"
+    std::string details;
+    std::string createdAt;   // UTC, for example "2026-10-31T09:30:00Z"
+};
 
 // Owns one connection to one SQLite database file.
 //
@@ -96,6 +105,33 @@ public:
     // The signed-in user's id, or false if nobody is signed in.
     bool signedInUserId(int &userId) const;
 
+    // True when a Session is attached, so records, plans and limits belong
+    // to accounts. Finora itself always attaches one.
+    bool accountsInUse() const;
+
+    // ---- What the signed-in person's plan allows (Phase 4C) ----
+
+    // The plan whose features may be used now, read from the signed-in
+    // person's subscription row (never from the user interface), with
+    // every deadline that has passed already applied. It is Finora Free
+    // when nobody is signed in, when no Session is attached, and when the
+    // subscription cannot be read: Finora then refuses paid features
+    // instead of allowing them by mistake.
+    PlanId currentPlan();
+
+    // The one check that every protected operation calls first. Returns
+    // true if the current plan includes `feature` and the feature is
+    // built; otherwise false, with a message that names the plan needed.
+    bool requireFeature(Feature feature);
+
+    // How many budgets may be active now: the limit of the signed-in
+    // person's plan (3 on Free, UNLIMITED_BUDGETS on paid plans). Plans
+    // belong to accounts, so without a Session there is no limit: only the
+    // tests of Milestones 2 to 4A run like that, and they keep working
+    // exactly as before. Finora itself always attaches the Session in
+    // main(), so for real use the plan's limit always applies.
+    int budgetLimit();
+
     // The schema version stored in the file, or -1 on error.
     int schemaVersion();
 
@@ -140,14 +176,21 @@ public:
     // person or for no account.
     bool recordAuditEvent(const QString &eventType, const QString &details);
 
+    // The signed-in person's own audit history, newest first, at most
+    // `limit` lines. Finora Business only: the plan is checked here, in
+    // the function itself, so no screen can read the history without it.
+    bool loadAuditHistory(std::vector<AuditEvent> &events, int limit = 500);
+
 private:
     bool enableForeignKeys();
     bool upgradeSchema();
     bool createVersion1Tables();
     bool insertSupportedCurrencies();
     bool backupBeforeUpgrade(int fromVersion);
-    bool verifyBackup(const QString &backupFile, int expectedVersion, long long expectedTransactions);
+    bool verifyBackup(const QString &backupFile, int expectedVersion, long long expectedTransactions,
+                      long long expectedAccounts);
     bool upgradeToVersion2();
+    bool upgradeToVersion3();
     bool checkForeignKeys();
     bool readNumber(const QString &sql, long long &number);
     bool runStatement(const QString &sql);

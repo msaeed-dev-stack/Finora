@@ -124,3 +124,31 @@ std::vector<BudgetProgress> allBudgetProgress(const std::vector<Budget> &budgets
     }
     return results;
 }
+
+void markPausedBudgets(std::vector<Budget> &budgets, int activeLimit)
+{
+    int count = static_cast<int>(budgets.size());
+    for (int i = 0; i < count; i++) {
+        // How many budgets are older than this one (have a smaller id)?
+        int older = 0;
+        for (int j = 0; j < count; j++) {
+            if (budgets[j].id < budgets[i].id) {
+                older++;
+            }
+        }
+        // With a limit of 3, the budgets with 0, 1 or 2 older ones stay active.
+        budgets[i].paused = (activeLimit >= 0 && older >= activeLimit);
+    }
+}
+
+int countPausedBudgets(const std::vector<Budget> &budgets)
+{
+    int paused = 0;
+    int count = static_cast<int>(budgets.size());
+    for (int i = 0; i < count; i++) {
+        if (budgets[i].paused) {
+            paused++;
+        }
+    }
+    return paused;
+}

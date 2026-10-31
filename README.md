@@ -4,11 +4,12 @@
 
 Finora is a desktop personal finance and budget management application for Windows. It is written in C++17 with Qt 6 Widgets and SQLite, and is being built as a Programming Fundamentals semester project.
 
-> **Current status: Milestone 4, Phase 4B complete; Phase 4C not started.**
+> **Current status: Milestone 4 complete (Phases 4A, 4B and 4C).**
 > - **From Milestone 3:** the Transactions page.
 > - **Phase 4A:** a **dashboard**, **monthly budgets**, a **light and a dark theme**, and a **safe database upgrade** to schema version 2.
 > - **Phase 4B:** local **accounts** with Argon2id-protected passwords, recovery codes, sessions, and **one person's data per account**.
-> - **Not built yet:** subscription plans (Phase 4C). Pages that are not built yet say so and carry a "Soon" badge.
+> - **Phase 4C:** four **subscription plans** (Free, Plus, Pro, Business) with plan rules checked below every screen, a **simulated checkout** (no card details, no real money), a billing history, CSV export, a monthly PDF summary and an audit history.
+> - **Not built yet:** savings goals, exchange rates, the Reports page and Business team features. Pages and features that are not built yet say so ("Soon").
 
 ## Student details
 
@@ -53,7 +54,7 @@ Finora is an offline desktop program that records income and expenses, compares 
 | Transactions page: list, add, edit, delete with confirmation | Done in Milestone 3 |
 | Search by description or category; filter by type, currency, category and period | Done in Milestone 3 |
 | Typed amounts such as 1,200.50 or 1,20,000 read exactly, with a "Will be saved as" preview | Done in Milestone 3 |
-| Automated core, interface and database tests | Done in Milestones 1 to 4A |
+| Automated tests: five programs (core, interface, database, accounts, subscriptions and billing) | Done in Milestones 1 to 4C |
 | Finora design system: violet brand, light and dark theme, Inter and Manrope fonts, recoloured icons | Done in Milestone 4, Phase 4A |
 | Dashboard: one wallet card per currency (balance, this month's income and spending), money-flow chart, budget alerts, recent transactions, spending by category | Done in Phase 4A |
 | Totals per currency with checked addition; currencies are never added together | Done in Phase 4A |
@@ -66,9 +67,14 @@ Finora is an offline desktop program that records income and expenses, compares 
 | Password recovery with 10 single-use recovery codes, stored only as hashes | Done in Phase 4B |
 | One person's data per account: every transaction, budget and setting belongs to the signed-in person | Done in Phase 4B |
 | Records made before accounts are moved into an account only after the person agrees | Done in Phase 4B |
-| Free, Plus, Pro and Business plans with a simulated checkout | Planned: Milestone 4, Phase 4C |
+| Free, Plus, Pro and Business plans; every new and existing account starts on Free; schema version 3 with a verified backup | Done in Phase 4C |
+| One table of entitlements; plan rules checked inside the operations, not only on screen; Free keeps 3 active budgets and pauses the rest without deleting them | Done in Phase 4C |
+| Subscription page: current plan, usage, four plan cards, a comparison of every feature, billing history; light and dark | Done in Phase 4C |
+| Simulated checkout (no card fields, no real money), upgrades, a smaller plan at the renewal date, cancel and resume, renewal with 7 days of grace, a 14-day Pro trial | Done in Phase 4C |
+| CSV export of transactions (Plus), a monthly PDF summary (Pro), the account's audit history (Business) | Done in Phase 4C |
+| Business team members, shared workspaces and roles | Planned: needs Finora Online (a server) |
 | Savings goals; PKR, USD and EUR with manual exchange rates | Planned: Milestone 5 |
-| Reports and CSV export | Planned: Milestone 6 |
+| Reports page (monthly and yearly reports) | Planned: Milestone 6 |
 | Final testing, documentation and Windows package | Planned: Milestone 7 |
 
 ## Requirements to build
@@ -243,23 +249,39 @@ Finora/
 - [Viva preparation](docs/VIVA_PREPARATION.md)
 - [Milestone 3 demonstration guide](docs/DEMO_MILESTONE3.md)
 - [Milestone 4 demonstration guide](docs/DEMO_MILESTONE4.md)
-- [Milestone 4 progress record: stages, files, tests, Argon2id settings](docs/MILESTONE4_PROGRESS.md)
+- [Milestone 4 progress record: stages, files, tests, Argon2id settings, the Phase 4C security review](docs/MILESTONE4_PROGRESS.md)
 - [Third-party notices: fonts, libsodium, Qt, SQLite](THIRD_PARTY_NOTICES.md)
 
-## Known limitations at Milestone 4, Phase 4B
+## Subscription plans (simulated billing)
+
+| Plan | Price per month | Built now, besides everything in the smaller plans |
+|---|---|---|
+| Finora Free | $0 | Transactions, dashboard, PKR, USD and EUR, up to 3 active budgets, budget alerts |
+| Finora Plus | $5.99 | Unlimited budgets, CSV export of transactions |
+| Finora Pro | $12.99 | A monthly PDF summary |
+| Finora Business | $24.99 | The account's audit history |
+
+- **Prices** are proposed for this project and have not been tested on the market. Features that are not built yet appear on the Subscription page with "Soon". Business team features appear with "Online", because they need Finora Online, a server that does not exist yet.
+- **Payments are simulated.** Finora collects no card details, has no payment-provider keys and moves no money. The checkout can approve a payment or simulate a declined one.
+- **Demonstrating renewals:** start `Finora.exe --billing-demo` to add the button "Demo: end this period now" to the Subscription page. It shows a renewal, a missed payment or an expiry live. It changes only that account's subscription dates.
+- **How a real payment provider would fit** (a server, hosted checkout pages, verified webhooks), and which providers are usable from Pakistan, is described in `docs/DESIGN.md`, section 12.
+
+## Known limitations at Milestone 4
 
 - Accounts are local demonstration accounts: no server, no email, no online sign-in. A forgotten password is reset with a recovery code (see "Accounts, passwords and recovery").
 - Creating an account says when an email address already has an account on this computer; signing in and resetting never reveal it.
 - Qt's own copies of a typed password cannot be wiped from memory reliably; Finora empties the password box at once and overwrites its own copies with zeros.
 - Hashing a password takes about 0.65 s with the MODERATE setting, so signing in shows a short busy pointer, and creating an account about 1.5 s.
-- Subscription plans (Phase 4C) are not built yet.
+- Payments are simulated, and renewals are confirmed by the person each month. Without a stored card, nothing can be charged automatically.
+- Plans are enforced on this computer. Whoever owns the PC can edit the database file or set the clock back. Real enforcement needs a server that holds the subscription (Finora Online, planned).
+- Exported CSV and PDF files are ordinary files in the folder the person chooses. They are not encrypted.
 - Different currencies are never added together, so there is no single "total balance" across PKR, USD and EUR. That needs exchange rates (Milestone 5).
 - Search and filters work on the list already loaded into memory. That is fast for one person's records; very large data sets would need filtering in SQL.
 - Search, and matching a budget to its category, ignore upper and lower case only for the English letters A to Z.
 - The Transactions table is always sorted newest first; clicking a column header does not re-sort it.
 - On the Transactions page, "Food" and "food" are still listed as two categories in the filter. Budgets and the dashboard treat them as one.
 - A budget is the same limit every month; there are no different limits for different months yet.
-- Savings goals, reports and exchange rates are not built yet; their pages say "Coming in Milestone N".
+- Savings goals, the Reports page and exchange rates are not built yet; their pages say "Coming in Milestone N".
 - The build paths assume Qt is installed in `C:\Qt`.
 - The greeting is chosen each time the dashboard is shown; it does not change while you stay on the dashboard.
 - Only one copy of Finora can run at a time, because SQLite lets only one program write to the database at once. A second copy says Finora is already open and closes. This is checked per Windows user account; two different Windows users have separate data folders and separate databases. Details are in [docs/DESIGN.md](docs/DESIGN.md), section 7.9.

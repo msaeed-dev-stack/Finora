@@ -12,6 +12,7 @@
 
 #include "BudgetDialog.h"
 #include "PageHeader.h"
+#include "Sidebar.h"   // PAGE_SUBSCRIPTION
 #include "Theme.h"
 #include "UiHelpers.h"
 #include "components/ProgressRing.h"
@@ -62,6 +63,7 @@ BudgetsPage::BudgetsPage(DatabaseManager &sharedDatabase, BudgetStore &sharedBud
     contentLayout->setContentsMargins(32, 28, 32, 32);
     contentLayout->setSpacing(20);
     contentLayout->addWidget(createHeader());
+    contentLayout->addWidget(createPlanLine());
     contentLayout->addWidget(summaryRow);
     contentLayout->addWidget(cardArea);
     contentLayout->addWidget(emptyState);
@@ -102,6 +104,27 @@ QWidget *BudgetsPage::createHeader()
     layout->addSpacing(8);
     layout->addWidget(addButton);
     return header;
+}
+
+// One line under the header with the plan's budget limit (Phase 4C).
+QWidget *BudgetsPage::createPlanLine()
+{
+    planLine = new QWidget(this);
+    planLineText = new QLabel(planLine);
+    planLineText->setObjectName("mutedText");
+
+    QPushButton *compare = new QPushButton("Compare plans", planLine);
+    compare->setObjectName("linkButton");
+    compare->setCursor(Qt::PointingHandCursor);
+    connect(compare, &QPushButton::clicked, this, &BudgetsPage::onComparePlansClicked);
+
+    QHBoxLayout *layout = new QHBoxLayout(planLine);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+    layout->addWidget(planLineText);
+    layout->addWidget(compare);
+    layout->addStretch();
+    return planLine;
 }
 
 QFrame *BudgetsPage::createEmptyState()
@@ -163,6 +186,7 @@ void BudgetsPage::showBudgets()
 
     clearLayout(cardGrid);
     clearLayout(summaryLayout);
+    showPlanLine();
 
     int count = static_cast<int>(progressList.size());
     for (int i = 0; i < count; i++) {
@@ -174,12 +198,13 @@ void BudgetsPage::showBudgets()
         cardGrid->setColumnStretch(column, 1);   // equal widths, also with fewer cards
     }
 
-    // One summary per currency that has budgets. Currencies are never mixed.
+    // One summary per currency that has budgets. Currencies are never
+    // mixed. Paused budgets are not tracked, so they are not counted.
     for (int c = 0; c < SUPPORTED_CURRENCY_COUNT; c++) {
         std::string code = SUPPORTED_CURRENCIES[c].code;
         bool used = false;
         for (int i = 0; i < count; i++) {
-            if (progressList[i].budget.currencyCode == code) {
+            if (progressList[i].budget.currencyCode == code && !progressList[i].budget.paused) {
                 used = true;
                 break;
             }
@@ -193,6 +218,30 @@ void BudgetsPage::showBudgets()
     cardArea->setVisible(count > 0);
     summaryRow->setVisible(count > 0);
     emptyState->setVisible(count == 0);
+}
+
+// "Finora Free: 2 of 3 active budgets" under the header. Without accounts
+// there are no plans, so the line is hidden.
+void BudgetsPage::showPlanLine()
+{
+    planLine->setVisible(database.accountsInUse());
+    if (!database.accountsInUse()) {
+        return;
+    }
+
+    QString plan = QString::fromStdString(planName(database.currentPlan()));
+    int limit = database.budgetLimit();
+    if (limit == UNLIMITED_BUDGETS) {
+        planLineText->setText(plan + ": unlimited budgets.");
+        return;
+    }
+    int paused = countPausedBudgets(budgets);
+    int active = static_cast<int>(budgets.size()) - paused;
+    QString text = plan + ": " + QString::number(active) + " of " + QString::number(limit) + " active budgets";
+    if (paused > 0) {
+        text += ", " + QString::number(paused) + " paused";
+    }
+    planLineText->setText(text + ".");
 }
 
 // A card for one budget: ring, category, amounts, status and buttons.
@@ -216,6 +265,15 @@ QFrame *BudgetsPage::createBudgetCard(const BudgetProgress &progress)
     QLabel *currency = new QLabel(QString::fromStdString(code) + " · per month", card);
     currency->setObjectName("mutedText");
     QLabel *chip = createChip(QString::fromStdString(budgetStatusName(progress.status)), tone, card);
+
+    // A paused budget (over the plan's limit, Phase 4C) is kept and can be
+    // edited or deleted, but it is not tracked, so it shows no spending.
+    if (budget.paused) {
+        ring->setProgress(0, "neutral");
+        chip->setText("Paused on " + QString::fromStdString(planName(database.currentPlan())));
+        setTone(chip, "neutral");
+        card->setAccessibleName(card->accessibleName() + ", paused");
+    }
 
     QVBoxLayout *titleLayout = new QVBoxLayout();
     titleLayout->setSpacing(4);
@@ -296,7 +354,20 @@ QFrame *BudgetsPage::createBudgetCard(const BudgetProgress &progress)
     layout->setSpacing(12);
     layout->addLayout(topRow);
     layout->addWidget(divider);
-    layout->addLayout(amounts);
+    if (budget.paused) {
+        // A paused budget is not tracked, so its amounts are not shown:
+        // the labels and their grid are deleted instead of being added.
+        clearLayout(amounts);
+        delete amounts;
+        QLabel *note = new QLabel("Not tracked while paused. Your plan tracks your "
+                                  + QString::number(FREE_ACTIVE_BUDGET_LIMIT)
+                                  + " oldest budgets; upgrade, or delete a budget, to track this one.", card);
+        note->setObjectName("mutedText");
+        note->setWordWrap(true);
+        layout->addWidget(note);
+    } else {
+        layout->addLayout(amounts);
+    }
     layout->addLayout(buttons);
     return card;
 }
@@ -312,7 +383,7 @@ QFrame *BudgetsPage::createCurrencySummary(const std::string &currencyCode)
     int count = static_cast<int>(progressList.size());
     for (int i = 0; i < count; i++) {
         const BudgetProgress &progress = progressList[i];
-        if (progress.budget.currencyCode != currencyCode) {
+        if (progress.budget.currencyCode != currencyCode || progress.budget.paused) {
             continue;
         }
         budgetCount++;
@@ -366,7 +437,13 @@ QFrame *BudgetsPage::createCurrencySummary(const std::string &currencyCode)
 bool BudgetsPage::saveNewBudget(Budget &budget)
 {
     if (!budgetStore.addBudget(budget)) {
-        showDatabaseError("save the budget", budgetStore.lastError());
+        // The plan's limit (checked inside BudgetStore) gets an explanation
+        // of the plans instead of an error message.
+        if (budgetStore.planLimitReached()) {
+            explainBudgetLimit();
+        } else {
+            showDatabaseError("save the budget", budgetStore.lastError());
+        }
         return false;
     }
     refresh();
@@ -408,11 +485,32 @@ const std::vector<BudgetProgress> &BudgetsPage::shownProgress() const
 
 void BudgetsPage::onAddClicked()
 {
+    // At the plan's limit, explain the plans instead of opening the form.
+    // This only saves the person a wasted form: BudgetStore checks the
+    // limit again when a budget is saved, whatever screen asks.
+    int limit = database.budgetLimit();
+    if (limit != UNLIMITED_BUDGETS && static_cast<int>(budgets.size()) >= limit) {
+        explainBudgetLimit();
+        return;
+    }
     BudgetDialog dialog(budgets, this);
     if (dialog.exec() == QDialog::Accepted) {
         Budget newBudget = dialog.budget();
         saveNewBudget(newBudget);
     }
+}
+
+void BudgetsPage::explainBudgetLimit()
+{
+    QString explanation = QString::fromStdString(budgetLimitMessage(database.currentPlan()));
+    if (askToSeePlans(this, "Budget limit reached", explanation)) {
+        emit openPageRequested(PAGE_SUBSCRIPTION);
+    }
+}
+
+void BudgetsPage::onComparePlansClicked()
+{
+    emit openPageRequested(PAGE_SUBSCRIPTION);
 }
 
 void BudgetsPage::onEditClicked()

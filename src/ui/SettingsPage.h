@@ -35,6 +35,7 @@ signals:
     void reducedMotionChosen(bool reduced);
     void profileChanged();
     void signOutRequested();
+    void openPageRequested(int pageNumber);   // "See plans" (Phase 4C)
 
 private slots:
     void onThemeButtonClicked(int id);
@@ -45,6 +46,7 @@ private slots:
     void onChangePasswordClicked();
     void onNewCodesClicked();
     void onMoveRecordsClicked();
+    void onAuditHistoryClicked();
 
 private:
     QFrame *createProfileCard();
@@ -63,6 +65,7 @@ private:
     QLabel *profileEmail = nullptr;
     QLabel *profileSince = nullptr;
     QLabel *codesLabel = nullptr;
+    QPushButton *auditButton = nullptr;   // "View" the audit history, locked below Finora Business
     QFrame *recordsCard = nullptr;
     QLabel *recordsText = nullptr;
     QCheckBox *reducedMotionBox = nullptr;

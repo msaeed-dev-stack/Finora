@@ -2,7 +2,7 @@
 
 This document explains how Finora is organised and how its algorithms work. It describes only what exists in the code. Anything not built yet is marked **Planned — Not Yet Implemented**.
 
-Last updated: Milestone 4, Phase 4B, 30 October 2026.
+Last updated: Milestone 4, Phase 4C, 31 October 2026.
 
 ## 1. Architecture
 
@@ -10,26 +10,33 @@ Finora is split into layers. Each layer has one job.
 
 | Layer | Folder | Job | Uses Qt? | Status |
 |---|---|---|---|---|
-| Core logic | `src/core` | Rules in plain C++: greeting, transaction validation, dates, currencies, reading and writing amounts, search and filters, checked totals per currency, budget rules | No | Done for Milestones 1 to 4A |
-| Database | `src/database` | Open the SQLite file, create and safely upgrade tables, backups; transactions, settings and budgets; the single-copy lock | Yes, Qt SQL | Done for Milestones 2 to 4A |
-| User interface | `src/ui` | Window, sidebar, light and dark theme, Dashboard, Transactions, Budgets and Settings pages, forms, reusable components | Yes, Qt Widgets and Qt Svg | Done for Milestones 1 to 4A |
-| Tests | `tests` | Check the core, the window and the database automatically | Core tests no; the others yes | 3 test programs |
+| Core logic | `src/core` | Rules in plain C++: greeting, transaction validation, dates, currencies, reading and writing amounts, search and filters, checked totals per currency, budget rules, password and account rules, the Session, plans and entitlements, the subscription lifecycle, CSV text | No | Done for Milestones 1 to 4C |
+| Database | `src/database` | Open the SQLite file, create and safely upgrade tables, backups; transactions, settings, budgets, accounts, subscriptions and payments; the single-copy lock | Yes, Qt SQL | Done for Milestones 2 to 4C |
+| Accounts | `src/auth` | Argon2id password hashing (libsodium) and the account rules: sign-up, sign-in, sessions, recovery | Yes, Qt Core | Done in Phase 4B |
+| Billing | `src/billing` | The payment gateway interface, the simulated gateway and the subscription lifecycle | Yes, Qt Core | Done in Phase 4C |
+| Reports | `src/reports` | The CSV export and the monthly PDF summary | Yes, Qt GUI | Done in Phase 4C |
+| User interface | `src/ui` | Windows, sidebar, light and dark theme, the pages, forms, dialogs, reusable components | Yes, Qt Widgets and Qt Svg | Done for Milestones 1 to 4C |
+| Tests | `tests` | Check the core, the windows, the database, the accounts and the subscriptions automatically | Core tests no; the others yes | 5 test programs |
 
 ```mermaid
 flowchart LR
-    Main["main.cpp"] --> DBM["DatabaseManager: src/database"]
-    Main --> UI["User interface: src/ui"]
-    UI --> Core["Core logic: src/core"]
-    DBM --> Core
+    Main["main.cpp"] --> UI["User interface: src/ui"]
+    Main --> Auth["Accounts: src/auth"]
+    Main --> Billing["Billing: src/billing"]
+    UI --> Auth
+    UI --> Billing
+    UI --> Reports["Reports: src/reports"]
+    Auth --> DBM["Database: src/database"]
+    Billing --> DBM
+    Reports --> DBM
+    UI --> DBM
+    DBM --> Core["Core logic: src/core"]
     DBM --> File[("finora.db: one SQLite file")]
-    CoreTests["finora_tests"] --> Core
-    UiTests["finora_ui_tests"] --> UI
-    DbTests["finora_db_tests"] --> DBM
 ```
 
 **Why the core has no Qt.** Rules such as "the amount must be above zero" live in `src/core` and use only standard C++: `int`, `long long`, `std::string`, arrays and structures. A small console program can test them directly.
 
-**Why all SQL is in one class.** `DatabaseManager` is the only code that contains SQL. In `CMakeLists.txt`, Qt SQL is linked to `finora_database` as `PRIVATE`, so the user interface cannot even see the SQL classes. If the database ever changes, only one class changes.
+**Why all SQL is in one folder.** Only `src/database` contains SQL: `DatabaseManager` and the store classes `BudgetStore`, `UserStore` and `SubscriptionStore`. In `CMakeLists.txt`, Qt SQL is linked to `finora_database` as `PRIVATE`, so the user interface, the account, billing and report code cannot even see the SQL classes.
 
 ## 2. Program start-up
 
@@ -872,3 +879,199 @@ They keep `user_id = NULL`, so no account sees them.
 | No user id from the interface | The owner comes only from the `Session`, which only `AuthService` can change (friend class) |
 | Records belong to the signed-in person | `user_id IS :owner` in every transaction and budget query; isolation tested with two accounts |
 | Existing records preserved | No new migration; older records move only with consent, in one verified transaction |
+
+## 12. Milestone 4, Phase 4C: subscription plans and billing
+
+Four plans: Finora Free ($0), Plus ($5.99), Pro ($12.99) and Business ($24.99) a month. These are proposed prices and have not been tested on the market. **Every payment is simulated:** Finora collects no card details, holds no payment-provider keys and moves no money.
+
+### 12.1 Who does what
+
+| Part | Layer | Job |
+|---|---|---|
+| `Plans` | core | `enum PlanId` (Free < Plus < Pro < Business), the plans as an array of structs, and **the one table of entitlements**: 28 features, each with its smallest plan and a state (built, planned or "needs Finora Online"). Also the budget limit and the "locked" messages |
+| `Subscription` | core | `enum SubscriptionStatus` and the lifecycle as pure functions: `subscriptionAt`, `planAt`, `planChangeFor`, `canStartTrial` |
+| `markPausedBudgets` | core | On Free, the 3 oldest budgets stay active and the others are paused |
+| `CsvExport` | core | CSV text, with quoting and protection against formula injection |
+| `DatabaseManager::currentPlan`, `requireFeature`, `budgetLimit`, `loadAuditHistory` | database | **The single gate.** Every protected operation calls it before it does anything |
+| `SubscriptionStore` | database | All subscription and payment SQL, always for the Session's owner. Its changing functions are private; `SubscriptionService` is its only friend class |
+| `PaymentGateway`, `SimulatedPaymentGateway` | billing | An abstract class and its one implementation, which moves no money |
+| `SubscriptionService` | billing | Payments, plan changes, the trial, time, and the demonstration mode |
+| `ReportExporter` | reports | The CSV export (Plus) and the monthly PDF summary (Pro, made with Qt's `QPdfWriter`) |
+| `SubscriptionPage`, `CheckoutDialog`, `AuditHistoryDialog` | ui | The screens. They show locks and explanations, but never decide anything alone |
+
+### 12.2 Schema version 3
+
+Two new tables. No existing table, row or password hash is changed. Section 10.3 describes the upgrade itself: a verified backup, one transaction, and a rollback on failure.
+
+- **`subscriptions`:** one row per account. It holds the plan and status; the start, renewal, end-of-access and cancellation times; a smaller plan waiting for the renewal date; whether the trial was used; and the last payment's reference and status.
+- **`payments`:** the billing history, one row per attempt. Each row has the plan, the reason (new, upgrade or renewal), the amount in US cents, the status (pending, succeeded or failed), the provider (`simulated` only), a unique reference, the paid period and the failure reason.
+
+The database's own rules (`CHECK`, `UNIQUE` and foreign keys):
+- the plan and the status agree;
+- an active plan has a renewal date, and every paid status has an end of access;
+- there is one subscription per account;
+- a payment is never for Free and never zero;
+- a succeeded payment has its period;
+- a payment and its subscription belong to the same account, enforced by a two-column foreign key on `(subscription_id, user_id)`.
+
+There is **no column for card details** anywhere.
+
+### 12.3 Plans and entitlements
+
+Because the plans are an ordered enum, "Pro includes everything in Plus" is a single comparison:
+
+```text
+planIncludes(plan, feature) = plan >= FEATURES[feature].lowestPlan
+requireFeature(feature):
+    plan = currentPlan()                       // from the signed-in person's own row, deadlines applied
+    IF the feature is not built OR NOT planIncludes(plan, feature) THEN
+        RETURN false with "\"<feature>\" is part of <smallest plan>. Your plan: <plan>."
+    RETURN true
+currentPlan():
+    no Session, nobody signed in, or the row missing or unreadable  ->  Free   (fails closed)
+    otherwise  ->  planAt(row, now)
+```
+
+| Operation | Checked in |
+|---|---|
+| A new budget (Free: at most 3) | `BudgetStore::addBudget`, which every screen goes through |
+| Which budgets are tracked | `BudgetStore::loadBudgets` marks the extra ones as paused |
+| CSV export (Plus) | `ReportExporter::exportTransactionsCsv`, before any record is read |
+| PDF summary (Pro) | `ReportExporter::exportMonthlyPdf`, before any record is read |
+| Audit history (Business) | `DatabaseManager::loadAuditHistory` |
+| Switching a paid plan on | `SubscriptionStore::activatePaidPlan`: only with a succeeded payment of the same person for the same plan |
+
+The screens show a lock and an explanation ("See plans" or "Not now"), but they only save the person a wasted form. If a screen skipped its check, the operation itself would still refuse. The tests prove this by calling the stores and the exporter directly.
+
+### 12.4 The subscription lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> Free: sign-up, or the upgrade to version 3
+    Free --> Active: a payment succeeded
+    Free --> Trial: 14-day Pro trial, once per account
+    Trial --> Active: a payment succeeded
+    Trial --> Expired: the trial ended, or was ended
+    Active --> Active: upgrade (a payment succeeded)
+    Active --> Cancelled: cancel
+    Cancelled --> Active: resume
+    Cancelled --> Expired: the paid period ended
+    Active --> PastDue: the renewal date arrived
+    PastDue --> Active: the renewal was paid
+    PastDue --> Expired: 7 days of grace ended, or "Stop now"
+    Expired --> Active: a payment succeeded
+    Expired --> Trial: only if the trial was never used
+```
+
+- **Time changes a subscription in two ways only** (`subscriptionAt`):
+  - Active becomes Past due at the renewal date. A smaller plan chosen earlier starts then.
+  - Trial, Past due and Cancelled become Expired, on Free, at their end of access.
+- **Every time is stored as UTC text** such as `2026-11-30T10:00:00Z`. Written this way, text order is time order, so the rules compare times with `<`.
+- **Renewal is confirmed by the person each month.** Finora stores no card, so nothing can honestly be charged automatically.
+
+### 12.5 A payment, step by step
+
+```text
+payForPlan(plan, simulateDecline):
+    current = subscriptionAt(stored row, now)            // deadlines applied and saved
+    change  = planChangeFor(current, plan)
+    IF change is not SUBSCRIBE, UPGRADE or RENEW THEN refuse ("needs no payment now")
+    amount    = PLANS[plan].priceMinor                   // never from the screen
+    reference = gateway.newReference()                   // "SIM-7KQ4M2TX9RHC"
+    INSERT the payment as pending                        // a trace even if Finora crashes now
+    result = gateway.charge(reference, amount, "USD")    // a virtual call
+    IF NOT result.succeeded THEN
+        payment -> failed, with the reason
+        RETURN "The simulated payment was declined. ... Your plan has not changed."
+    ONE transaction:
+        payment      -> succeeded   WHERE id = payment AND user_id = owner AND plan = plan AND status = pending
+        subscription -> active      WHERE user_id = owner
+                                      AND EXISTS (a succeeded payment of this owner for this plan)
+        audit event "plan_activated"
+    (if either UPDATE changes no row, everything is rolled back and the payment is marked as failed)
+```
+
+At start-up, a payment left `pending` by a crash is marked as failed. Only one copy of Finora can run, so no other copy can be in the middle of a payment.
+
+### 12.6 Budgets on Free
+
+```text
+markPausedBudgets(budgets, limit):
+    FOR each budget b
+        older = the number of budgets with a smaller id than b
+        b.paused = (limit is not UNLIMITED) AND (older >= limit)
+```
+
+Paused budgets are kept, shown and can be edited or deleted, but they are not tracked: they cause no alerts and are left out of the totals.
+
+- **One rule covers every way to exceed the limit:** a downgrade, a trial or paid period that ends, and moving older records into an account.
+- **Upgrading makes every budget active again.**
+- **Without a Session there is no limit.** That mode has no accounts and so no plans; only the tests of Milestones 2 to 4A run like this.
+
+### 12.7 Exports and the audit history
+
+- **CSV (Plus).** `transactionsCsv()` writes the header `Date,Type,Category,Description,Currency,Amount` and one line per transaction, each ending with `\r\n`. Amounts are written as `1200.50`, without thousands separators.
+  - A field with a comma, a quote or a line break is put in quotes, and inner quotes are doubled.
+  - A field that starts with `=`, `+`, `-`, `@`, a tab or a carriage return gets a `'` in front, so a spreadsheet never runs it as a formula ("CSV injection").
+  - `QSaveFile` writes the file atomically: the real file is replaced only when everything was written. The file starts with the UTF-8 mark so Excel reads it correctly.
+- **PDF (Pro).** `monthlySummaryHtml()` builds a simple page: income and expenses per currency (never mixed), spending by category, and the tracked budgets.
+  - Text from the records is escaped (`toHtmlEscaped`), so a category such as `<b>` cannot change the page.
+  - `QTextDocument::print()` draws the page onto a `QPdfWriter` with A4 pages. Both are part of Qt GUI, so no new library is needed.
+- **Audit history (Business).** The signed-in person's own `audit_events`, newest first: sign-ins, password changes, plan changes, payments and exports.
+
+### 12.8 Security requirements and where they are met
+
+| Requirement | How |
+|---|---|
+| Never store real card information | No card field in `PaymentRequest`, in the checkout or in the tables. Tests check that the checkout has no text field and that no column name suggests card data |
+| Never claim that a simulated payment is real | A banner on the Subscription page and in the checkout; the provider can only be `simulated` (`CHECK`); the history says "Paid (simulated)" |
+| No paid plan without a successful payment of the same person and plan | The guard in `activatePaidPlan` (12.5). A test gateway that tampers with the payment in three ways cannot switch on a plan |
+| Subscription and payment operations tied to the Session | The owner comes only from the Session through `DatabaseManager`; no function takes a user id from the screen; `SubscriptionService` is the only friend of `SubscriptionStore` |
+| Nothing deleted on a downgrade | Budgets are paused, not deleted (tests count the rows); expired plans keep every record |
+| No payment-provider secrets in the application | The simulated gateway has no keys and no network code. A search of the code found none |
+| Plan rules below the screens | `BudgetStore`, `ReportExporter` and `loadAuditHistory` check by themselves |
+| The demonstration mode cannot be used otherwise | `SubscriptionService::simulatePeriodEnd` refuses unless Finora was started with `--billing-demo` |
+| One person's subscription data | Every query has `user_id = :owner`; two-column foreign key; tests with two accounts |
+
+### 12.9 A real payment provider: the production path (Planned — Not Yet Implemented)
+
+1. **The desktop app never sees card details or provider keys.**
+   - It asks Finora's server to start a checkout.
+   - The server creates a checkout session at the provider with its **secret key**, which exists only on the server, and returns a link to the provider's hosted payment page.
+   - The app opens that link in the browser.
+2. **The provider confirms the payment to the server.** It charges the customer and calls the server's webhook. The server:
+   - verifies the webhook's **signature** with a second server-only secret;
+   - records the event **idempotently**, so the same event arriving twice changes nothing;
+   - updates the subscription.
+3. **The app reads its plan from the server** (a signed entitlement), not from the local SQLite file. Editing the local file then unlocks nothing.
+4. **Renewals are charged by the provider,** which keeps the payment method. A failed renewal leads to Past due with the same grace period.
+5. **In Finora's code**, a new `PaymentGateway` subclass that talks to the server replaces `SimulatedPaymentGateway`. `SubscriptionService` stays the same, and the provider rule in `payments` gets a migration.
+
+### 12.10 Payment providers usable from Pakistan (research note)
+
+Checked on 31 October 2026, on the providers' own pages where they could be read. Conditions change: confirm with each provider, and with a lawyer and an accountant (company registration, FBR tax, State Bank of Pakistan rules), before signing anything.
+
+Each row separates what an official source **confirms** from what still **needs the provider's own confirmation**. Nothing here confirms that a particular Pakistani seller will be accepted; every provider checks each seller itself.
+
+| Option | What it is | Confirmed by an official source | Still needs direct confirmation | Source |
+|---|---|---|---|---|
+| Stripe | Card payments and subscriptions | Pakistan is **not** on Stripe's list of countries where businesses can sign up. A Pakistani business cannot open its own Stripe account; only a company registered in a supported country can | Nothing; this row is a confirmed "no" for a company registered in Pakistan | [stripe.com/global](https://stripe.com/global) |
+| Paddle | A "merchant of record": it sells the software on the seller's behalf and handles sales tax and VAT, invoices and refunds | Pakistan is **not** on Paddle's list of unsupported countries, and Paddle says it works with software businesses anywhere except those countries | Whether Paddle accepts a particular seller from Pakistan: Paddle verifies every seller, its list can change, and the page does not mention individual sellers | [Paddle: supported countries](https://www.paddle.com/help/start/account-verification/which-countries-are-supported-by-paddle), [developer documentation](https://developer.paddle.com/concepts/sell/supported-countries-locales) |
+| Safepay | A Pakistani payment gateway | Its own site lists subscriptions ("recurring payments"), tokenization (Vault), developer APIs, and local methods including Raast, Easypaisa, JazzCash and PayPak. It calls itself a regulated payment system operator and provider | Merchant eligibility, prices, which methods allow automatic renewals, and the regulator and licence behind "regulated" (the page does not name them) | [getsafepay.pk](https://getsafepay.pk/) |
+| Easypaisa Online Payment Gateway | The merchant gateway of Easypaisa | Its business page describes the gateway: open to businesses with a live website or app; registration and identity checks through a merchant portal; settlement daily or instantly for mobile-account payments, and in 7 working days for over-the-counter payments. The page itself blocked automated reading, so these points come from its indexed text | Whether recurring or subscription payments are possible (the page does not describe them), prices and the current terms | [easypaisa.com.pk](https://easypaisa.com.pk/?p=16718) |
+| JazzCash | A mobile-wallet payment gateway | Nothing: the official site refused an automated reading. Only third-party sources describe a hosted checkout for registered merchants | Everything: eligibility, the integration, recurring payments, prices | [jazzcash.com.pk](https://www.jazzcash.com.pk) |
+| PayFast | The gateway of APPS (Avanza Premier Payment Services) | Nothing from PayFast itself: the official site refused an automated reading. A news report says the State Bank of Pakistan approved its pilot operation in 2020 | Everything: its current licence, eligibility, recurring payments, prices | [gopayfast.com](https://gopayfast.com), [ProPakistani, 2020](https://propakistani.pk/2020/07/17/state-bank-of-pakistan-grants-approval-for-pilot-operation-to-apps-for-ecommerce-payment-gateway-payfast/) |
+| Raast | Pakistan's instant payment system, run by the State Bank | The State Bank announced person-to-merchant (P2M) payments in December 2023 | Which bank or provider would connect Finora to Raast, and on what terms. Raast is not a card-subscription system by itself, but it suits a monthly "pay now" renewal like Finora's | [SBP press release, 6 Dec 2023](https://www.sbp.org.pk/press/2023/Pr-06-Dec-2023.pdf) |
+
+**A possible plan for Finora Online:**
+- a merchant of record such as Paddle for customers abroad;
+- a local gateway with subscriptions (such as Safepay) or the wallets and Raast for customers paying in PKR;
+- in both cases, through Finora's own server as in 12.9.
+
+### 12.11 Limitations of Phase 4C
+
+- **Payments are simulated,** and each renewal is confirmed by the person.
+- **Plans are enforced on this computer.** Whoever owns it can edit `finora.db` or set the Windows clock back. Real enforcement needs the server of 12.9.
+- **An upgrade starts a new month at the full price,** without a refund for the unused part. The checkout says so.
+- **Some features are not built yet.** Many are marked "Soon", and Business team features are marked "Online" (they need Finora Online). The page never shows a tick for them.
+- **Exported files are not encrypted.**

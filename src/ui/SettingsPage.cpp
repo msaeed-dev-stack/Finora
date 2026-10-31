@@ -21,6 +21,8 @@
 #include "UiHelpers.h"
 #include "components/Toast.h"
 #include "core/AccountRules.h"
+#include "AuditHistoryDialog.h"
+#include "Sidebar.h"   // PAGE_SUBSCRIPTION
 
 #include <QDate>
 #include <QMessageBox>
@@ -202,6 +204,9 @@ void SettingsPage::refresh()
     if (auth == nullptr || !auth->session().isSignedIn()) {
         return;
     }
+    bool auditLocked = !planIncludes(database.currentPlan(), FEATURE_AUDIT_HISTORY);
+    showLockIfNeeded(auditButton, auditLocked,
+                     QString::fromStdString(planName(FEATURES[FEATURE_AUDIT_HISTORY].lowestPlan)));
 
     // ---- The account cards ----
     UserAccount account;
@@ -293,12 +298,26 @@ QFrame *SettingsPage::createSecurityCard()
     codesRow->addWidget(codesLabel, 1);
     codesRow->addWidget(codesButton);
 
+    // Phase 4C: the account's audit history, for Finora Business.
+    QLabel *auditText = new QLabel("Audit history: sign-ins, password changes, plan changes and payments", card);
+    auditText->setObjectName("bodyText");
+    auditText->setWordWrap(true);
+    auditButton = new QPushButton("View", card);
+    auditButton->setObjectName("secondaryButton");
+    auditButton->setAccessibleName("View the audit history");
+    auditButton->setCursor(Qt::PointingHandCursor);
+    QHBoxLayout *auditRow = new QHBoxLayout();
+    auditRow->addWidget(auditText, 1);
+    auditRow->addWidget(auditButton);
+    connect(auditButton, &QPushButton::clicked, this, &SettingsPage::onAuditHistoryClicked);
+
     QPushButton *signOutButton = new QPushButton("Sign out", card);
     signOutButton->setObjectName("dangerButton");
     signOutButton->setCursor(Qt::PointingHandCursor);
 
     body->addLayout(passwordRow);
     body->addLayout(codesRow);
+    body->addLayout(auditRow);
     body->addWidget(signOutButton, 0, Qt::AlignLeft);
 
     connect(passwordButton, &QPushButton::clicked, this, &SettingsPage::onChangePasswordClicked);
@@ -428,5 +447,22 @@ void SettingsPage::onLicencesClicked()
     layout->addWidget(heading);
     layout->addWidget(licenceText, 1);
     layout->addWidget(closeButton, 0, Qt::AlignRight);
+    dialog.exec();
+}
+
+// Phase 4C: the audit history is part of Finora Business. Below it, the
+// plans are explained instead; DatabaseManager::loadAuditHistory checks
+// the plan again, whatever screen asks.
+void SettingsPage::onAuditHistoryClicked()
+{
+    PlanId plan = database.currentPlan();
+    if (!planIncludes(plan, FEATURE_AUDIT_HISTORY)) {
+        if (askToSeePlans(this, "Audit history",
+                          QString::fromStdString(lockedFeatureMessage(FEATURE_AUDIT_HISTORY, plan)))) {
+            emit openPageRequested(PAGE_SUBSCRIPTION);
+        }
+        return;
+    }
+    AuditHistoryDialog dialog(database, this);
     dialog.exec();
 }

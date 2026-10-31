@@ -47,8 +47,17 @@ public:
     // Called by MainWindow when the page is shown or the theme changes (Page).
     void refresh() override;
 
+    // Writes every transaction to a CSV file (Finora Plus, Phase 4C).
+    // ReportExporter checks the plan itself. Public for the tests.
+    bool exportCsvTo(const QString &path);
+
+signals:
+    // "See plans" asks MainWindow to open the Subscription page.
+    void openPageRequested(int pageNumber);
+
 private slots:
     void onAddClicked();
+    void onExportClicked();
     void onEditClicked();
     void onDeleteClicked();
     void onSelectionChanged();
@@ -73,6 +82,7 @@ private:
 
     QPushButton *editButton = nullptr;
     QPushButton *deleteButton = nullptr;
+    QPushButton *exportButton = nullptr;   // "Export CSV", locked below Finora Plus
     QLabel *messageLabel = nullptr;     // green "Transaction added." banner
     QTimer *messageTimer = nullptr;     // hides the banner after a few seconds
     QLineEdit *searchEdit = nullptr;

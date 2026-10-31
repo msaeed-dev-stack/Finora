@@ -6,12 +6,15 @@
 #include <QAbstractButton>
 #include <QDate>
 #include <QDialog>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QMessageBox>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QStandardPaths>
 #include <QTime>
 
 #include "PageHeader.h"
@@ -24,6 +27,7 @@
 #include "core/Greeting.h"
 #include "core/Money.h"
 #include "core/Totals.h"
+#include "reports/ReportExporter.h"
 
 const int RECENT_ROW_COUNT = 6;       // rows in "Recent transactions"
 const int SPENDING_ROW_COUNT = 5;     // categories in "Spending by category"
@@ -91,6 +95,12 @@ QWidget *DashboardPage::createHeader()
     addButton->setCursor(Qt::PointingHandCursor);
     connect(addButton, &QPushButton::clicked, this, &DashboardPage::onAddTransactionClicked);
 
+    // Phase 4C: a PDF summary of the month on screen, for Finora Pro and larger.
+    pdfButton = new QPushButton("PDF summary", header);
+    pdfButton->setObjectName("secondaryButton");
+    pdfButton->setCursor(Qt::PointingHandCursor);
+    connect(pdfButton, &QPushButton::clicked, this, &DashboardPage::onPdfClicked);
+
     QHBoxLayout *layout = new QHBoxLayout(header);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(12);
@@ -98,8 +108,46 @@ QWidget *DashboardPage::createHeader()
     layout->addStretch();
     layout->addWidget(switcher);
     layout->addSpacing(8);
+    layout->addWidget(pdfButton);
     layout->addWidget(addButton);
     return header;
+}
+
+// ---- PDF summary (Phase 4C) ------------------------------------------------
+
+void DashboardPage::onPdfClicked()
+{
+    // Below Finora Pro, explain the plans instead of asking for a file.
+    // ReportExporter checks the plan again before it reads any record.
+    PlanId plan = database.currentPlan();
+    if (!planIncludes(plan, FEATURE_PDF_REPORTS)) {
+        if (askToSeePlans(this, "PDF summary", QString::fromStdString(lockedFeatureMessage(FEATURE_PDF_REPORTS, plan)))) {
+            emit openPageRequested(PAGE_SUBSCRIPTION);
+        }
+        return;
+    }
+    QString suggested = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
+                        + "/Finora summary " + switcher->month() + ".pdf";
+    QString path = QFileDialog::getSaveFileName(this, "Save the monthly summary", suggested, "PDF files (*.pdf)");
+    if (!path.isEmpty()) {
+        exportPdfTo(path);
+    }
+}
+
+bool DashboardPage::exportPdfTo(const QString &path)
+{
+    ReportExporter exporter(database);
+    QString owner = userFirstName;
+    if (owner.isEmpty()) {
+        owner = "you";
+    }
+    if (!exporter.exportMonthlyPdf(switcher->month(), owner, path)) {
+        QMessageBox::warning(this, "Finora", "Could not save the summary.\n\nReason: " + exporter.lastError());
+        return false;
+    }
+    Toast::showMessage(this, "Saved the " + monthTitle(switcher->month()) + " summary to "
+                                 + QFileInfo(path).fileName() + ".");
+    return true;
 }
 
 QWidget *DashboardPage::createWalletRow()
@@ -319,6 +367,8 @@ void DashboardPage::refresh()
     greetingLabel->setText(greeting);
 
     switcher->refreshIcons();
+    bool pdfLocked = !planIncludes(database.currentPlan(), FEATURE_PDF_REPORTS);
+    showLockIfNeeded(pdfButton, pdfLocked, QString::fromStdString(planName(FEATURES[FEATURE_PDF_REPORTS].lowestPlan)));
     updateLegend();
     showWallets();
     showChart();
@@ -355,7 +405,16 @@ void DashboardPage::showBudgetAlerts()
     clearLayout(alertsLayout);
     alertsSubtitle->setText(monthTitle(switcher->month()));
 
-    std::vector<BudgetProgress> progress = allBudgetProgress(budgets, transactions,
+    // Paused budgets (over the plan's limit, Phase 4C) are not tracked, so
+    // they never cause an alert.
+    std::vector<Budget> activeBudgets;
+    int budgetTotal = static_cast<int>(budgets.size());
+    for (int i = 0; i < budgetTotal; i++) {
+        if (!budgets[i].paused) {
+            activeBudgets.push_back(budgets[i]);
+        }
+    }
+    std::vector<BudgetProgress> progress = allBudgetProgress(activeBudgets, transactions,
                                                              switcher->month().toStdString());
 
     // Collect the budgets that need attention, the most used first.
@@ -402,8 +461,8 @@ void DashboardPage::showBudgetAlerts()
         QLabel *icon = new QLabel(card);
         icon->setPixmap(tintedIcon("check_circle", themeColors().income, 22));
         QString message = "Your budget is on track";
-        if (budgets.size() > 1) {
-            message = "All " + QString::number(budgets.size()) + " budgets are on track";
+        if (activeBudgets.size() > 1) {
+            message = "All " + QString::number(activeBudgets.size()) + " budgets are on track";
         }
         QLabel *text = new QLabel(message + " this month.", card);
         text->setObjectName("bodyText");

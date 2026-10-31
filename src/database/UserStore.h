@@ -47,8 +47,9 @@ public:
     bool isEmailUsedByOther(const std::string &email, int userId, bool &used);
 
     // Creates the account, copies the current appearance settings into
-    // the new user's settings, and stores the recovery code hashes, all
-    // in ONE database transaction. On success account.id is set.
+    // the new user's settings, stores the recovery code hashes and starts
+    // the Free plan, all in ONE database transaction. On success
+    // account.id is set.
     bool createAccount(UserAccount &account, const std::vector<std::string> &recoveryCodeHashes);
 
     bool recordFailedSignIn(int userId, int failedSignIns, const std::string &lockedUntil);

@@ -22,10 +22,12 @@ public:
 
     // Saves a valid budget. On success, budget.id is set to the new
     // budget's number. A second budget for the same category and
-    // currency is refused with a clear message.
+    // currency is refused with a clear message. On Finora Free, a fourth
+    // budget is refused too (then planLimitReached() is true).
     bool addBudget(Budget &budget);
 
-    // Loads every budget, sorted by category and then currency.
+    // Loads every budget, sorted by category and then currency. On a plan
+    // with a limit, the budgets over the limit come back with paused = true.
     bool loadBudgets(std::vector<Budget> &results);
 
     // Saves new values for an existing budget, found by budget.id.
@@ -36,12 +38,18 @@ public:
 
     QString lastError() const;
 
+    // True when the last addBudget() was refused because the plan allows
+    // no more budgets, so the screen can explain the plans instead.
+    bool planLimitReached() const;
+
 private:
+    bool countBudgets(const QVariant &owner, int &count);
     bool checkNoDuplicate(const Budget &budget);
     bool fail(const QString &message);
 
     DatabaseManager &database;   // created in main(); this store only uses it
     QString errorMessage;
+    bool limitReached = false;   // see planLimitReached()
 };
 
 #endif // FINORA_BUDGETSTORE_H

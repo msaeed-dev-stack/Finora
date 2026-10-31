@@ -29,6 +29,7 @@ const NavItem NAV_ITEMS[PAGE_COUNT] = {
     {"Goals",        "goals",        true},
     {"Reports",      "reports",      true},
     {"Currency",     "currency",     true},
+    {"Subscription", "subscription", false},
     {"Settings",     "settings",     false}
 };
 
@@ -64,10 +65,17 @@ Sidebar::Sidebar(QWidget *parent)
     accountNameLabel->setObjectName("accountName");
     accountEmailLabel = new QLabel(accountArea);
     accountEmailLabel->setObjectName("accountEmail");
+    planButton = new QPushButton(accountArea);
+    planButton->setObjectName("planChip");
+    planButton->setCursor(Qt::PointingHandCursor);
+    planButton->hide();
+    connect(planButton, &QPushButton::clicked, this, &Sidebar::onPlanClicked);
     QVBoxLayout *accountText = new QVBoxLayout();
     accountText->setSpacing(0);
     accountText->addWidget(accountNameLabel);
     accountText->addWidget(accountEmailLabel);
+    accountText->addSpacing(4);
+    accountText->addWidget(planButton, 0, Qt::AlignLeft);
     QHBoxLayout *accountRow = new QHBoxLayout();
     accountRow->setSpacing(10);
     accountRow->addWidget(avatarLabel);
@@ -147,9 +155,23 @@ void Sidebar::showAccount(const QString &displayName, const QString &email)
     accountArea->show();
 }
 
+void Sidebar::showPlan(const QString &text, const QString &tone)
+{
+    planButton->setText(text);
+    setTone(planButton, tone);
+    planButton->setAccessibleName("Your plan: " + text + ". Open the Subscription page");
+    planButton->setToolTip("Your plan. Click to open the Subscription page.");
+    planButton->show();
+}
+
 void Sidebar::onNavButtonClicked(int pageNumber)
 {
     emit pageSelected(pageNumber);   // tell MainWindow which page was chosen
+}
+
+void Sidebar::onPlanClicked()
+{
+    emit pageSelected(PAGE_SUBSCRIPTION);
 }
 
 // The logo, the name "Finora" and the tagline at the top of the sidebar.

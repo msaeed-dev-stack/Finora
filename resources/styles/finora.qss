@@ -437,7 +437,9 @@ QRadioButton::indicator:focus {
 
 /* ---- Tables ---- */
 QTableWidget#transactionTable,
-QTableWidget#recentTable {
+QTableWidget#recentTable,
+QTableWidget#featureTable,
+QTableWidget#historyTable {
     background-color: {{surface}};
     alternate-background-color: {{surfaceMuted}};
     color: {{text}};
@@ -447,7 +449,9 @@ QTableWidget#recentTable {
 }
 
 QTableWidget#transactionTable::item,
-QTableWidget#recentTable::item {
+QTableWidget#recentTable::item,
+QTableWidget#featureTable::item,
+QTableWidget#historyTable::item {
     padding: 6px;
 }
 
@@ -800,4 +804,90 @@ QLabel#accountName {
 QLabel#accountEmail {
     color: {{textMuted}};
     font-size: 11px;
+}
+
+/* ---- Subscription page and plan chip (Phase 4C) ---- */
+
+/* The plan under the person's name in the sidebar. The words say the
+   plan and its status; the colour only repeats them. */
+QPushButton#planChip {
+    border: 2px solid transparent;
+    border-radius: 9px;
+    padding: 1px 8px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+QPushButton#planChip[tone="info"] {
+    background-color: {{primarySoft}};
+    color: {{primaryText}};
+}
+
+QPushButton#planChip[tone="warning"] {
+    background-color: {{warningSoft}};
+    color: {{warningText}};
+}
+
+QPushButton#planChip[tone="neutral"] {
+    background-color: {{surfaceMuted}};
+    color: {{textMuted}};
+}
+
+QPushButton#planChip:focus {
+    border-color: {{focus}};
+}
+
+QFrame#planCard {
+    background-color: {{surface}};
+    border: 1px solid {{border}};
+    border-radius: 16px;
+}
+
+/* The person's own plan gets a violet edge. */
+QFrame#planCard[current="true"] {
+    border: 2px solid {{primary}};
+}
+
+QLabel#planName {
+    color: {{text}};
+    font-family: "Manrope";
+    font-size: 16px;
+    font-weight: 700;
+}
+
+QLabel#planPrice {
+    color: {{text}};
+    font-family: "Manrope";
+    font-size: 26px;
+    font-weight: 800;
+}
+
+QLabel#planHeroName {
+    color: {{text}};
+    font-family: "Manrope";
+    font-size: 22px;
+    font-weight: 800;
+}
+
+QLabel#usageNumber {
+    color: {{text}};
+    font-family: "Manrope";
+    font-size: 24px;
+    font-weight: 800;
+}
+
+QLabel#featureText {
+    color: {{text}};
+    font-size: 13px;
+}
+
+/* A green tick only for features that really work; a hollow circle for
+   features that are planned. */
+QLabel#featureMark {
+    color: {{income}};
+    font-weight: 700;
+}
+
+QLabel#featureMarkPlanned {
+    color: {{textMuted}};
 }

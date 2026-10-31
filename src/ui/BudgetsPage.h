@@ -42,18 +42,26 @@ public:
     // What the page currently shows, for the tests.
     const std::vector<BudgetProgress> &shownProgress() const;
 
+signals:
+    // "Compare plans" and "See plans" ask MainWindow to open the Subscription page.
+    void openPageRequested(int pageNumber);
+
 private slots:
     void onAddClicked();
+    void onComparePlansClicked();
     void onEditClicked();
     void onDeleteClicked();
     void onMonthChanged();
 
 private:
     QWidget *createHeader();
+    QWidget *createPlanLine();
     QFrame *createEmptyState();
     QFrame *createBudgetCard(const BudgetProgress &progress);
     QFrame *createCurrencySummary(const std::string &currencyCode);
     void showBudgets();
+    void showPlanLine();
+    void explainBudgetLimit();
     bool findBudget(int id, Budget &result) const;
     void showDatabaseError(const QString &action, const QString &reason);
 
@@ -64,6 +72,8 @@ private:
     std::vector<BudgetProgress> progressList;   // one entry per budget for the chosen month
 
     MonthSwitcher *switcher = nullptr;
+    QWidget *planLine = nullptr;          // "Finora Free: 2 of 3 active budgets"
+    QLabel *planLineText = nullptr;
     QWidget *summaryRow = nullptr;
     QHBoxLayout *summaryLayout = nullptr;
     QWidget *cardArea = nullptr;

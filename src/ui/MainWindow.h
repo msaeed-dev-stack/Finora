@@ -16,6 +16,7 @@
 #include "Page.h"
 #include "SettingsPage.h"
 #include "Sidebar.h"
+#include "SubscriptionPage.h"
 #include "auth/AuthService.h"
 #include "database/BudgetStore.h"
 #include "database/DatabaseManager.h"
@@ -30,7 +31,9 @@ public:
     // first applies the theme and motion setting saved in the database.
     // `sharedAuth` is the signed-in person's AuthService, or nullptr when
     // Finora runs without accounts (the tests of Milestones 1 to 4A).
-    MainWindow(DatabaseManager &sharedDatabase, AuthService *sharedAuth = nullptr, QWidget *parent = nullptr);
+    // `sharedSubscriptions` changes plans (Phase 4C); nullptr without accounts.
+    MainWindow(DatabaseManager &sharedDatabase, AuthService *sharedAuth = nullptr,
+               SubscriptionService *sharedSubscriptions = nullptr, QWidget *parent = nullptr);
 
     bool isDarkTheme() const;
 
@@ -54,6 +57,7 @@ private slots:
     void toggleTheme();
     void onPageFadeFinished();
     void showAccount();
+    void showPlanIndicator();
 
 private:
     void applySavedAppearance();
@@ -64,11 +68,13 @@ private:
 
     DatabaseManager &database;   // created in main(); the window only uses it
     AuthService *auth = nullptr; // the account service, or nullptr without accounts
+    SubscriptionService *subscriptions = nullptr;   // plan changes, or nullptr without accounts
     BudgetStore budgetStore;     // the budget part of the same database
     DashboardPage *dashboardPage = nullptr;
     Sidebar *sidebar = nullptr;
     QStackedWidget *pageStack = nullptr;
     SettingsPage *settingsPage = nullptr;
+    SubscriptionPage *subscriptionPage = nullptr;
 
     // Every page as a Page pointer, in page-number order. Calling
     // pages[n]->refresh() runs the refresh() of that page's own class.

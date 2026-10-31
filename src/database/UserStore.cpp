@@ -132,7 +132,17 @@ bool UserStore::createAccount(UserAccount &account, const std::vector<std::strin
         return rollbackAndFail("Could not save the account's settings: " + copySettings.lastError().text());
     }
 
-    if (!insertRecoveryCodes(newId, recoveryCodeHashes) || !insertEvent(newId, "account_created", "")) {
+    // Every new account starts on Finora Free (Phase 4C). It is created
+    // in the same transaction, so an account never exists without a plan.
+    QSqlQuery freePlan(db);
+    freePlan.prepare("INSERT INTO subscriptions (user_id, plan, status) VALUES (:id, 'free', 'free')");
+    freePlan.bindValue(":id", newId);
+    if (!freePlan.exec()) {
+        return rollbackAndFail("Could not start the Free plan: " + freePlan.lastError().text());
+    }
+
+    if (!insertRecoveryCodes(newId, recoveryCodeHashes) || !insertEvent(newId, "account_created", "")
+        || !insertEvent(newId, "plan_started", "Finora Free")) {
         return rollbackAndFail(errorMessage);
     }
     if (!db.commit()) {

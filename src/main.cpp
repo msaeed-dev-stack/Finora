@@ -14,6 +14,8 @@
 
 #include "auth/AuthService.h"
 #include "auth/PasswordHasher.h"
+#include "billing/SimulatedPaymentGateway.h"
+#include "billing/SubscriptionService.h"
 #include "core/Session.h"
 #include "database/DatabaseManager.h"
 #include "database/InstanceLock.h"
@@ -47,6 +49,15 @@ void showAlreadyRunning()
                              "records are always saved safely.");
 }
 
+// What an upgrade from `storedVersion` adds, in words for the question below.
+QString upgradeChangesText(int storedVersion)
+{
+    if (storedVersion == 1) {
+        return "adds budgets, user accounts and subscription plans";
+    }
+    return "adds subscription plans and a billing history";
+}
+
 // Asks before a database from an older Finora is upgraded. The user
 // decides; "Quit" closes Finora and leaves the file exactly as it is.
 bool askToUpgrade(const QString &databasePath, int storedVersion)
@@ -59,8 +70,8 @@ bool askToUpgrade(const QString &databasePath, int storedVersion)
     box.setText("This version of Finora stores your records in a new layout.");
     box.setInformativeText(
         "Your data file uses layout " + QString::number(storedVersion) + ". Finora will upgrade it to layout "
-        + QString::number(CURRENT_SCHEMA_VERSION) + ", which adds budgets and prepares user accounts. "
-        "Every record is kept.\n\n"
+        + QString::number(CURRENT_SCHEMA_VERSION) + ", which " + upgradeChangesText(storedVersion) + ". "
+        "Every record and every account is kept.\n\n"
         "Before anything changes, a complete backup copy is saved in:\n" + backupFolder + "\n\n"
         "If any step fails, the upgrade is undone and your file stays exactly as it is.");
     QPushButton *upgradeButton = box.addButton("Upgrade and continue", QMessageBox::AcceptRole);
@@ -138,8 +149,18 @@ int main(int argc, char *argv[])
     PasswordHasher recoveryCodeHasher(HASH_INTERACTIVE);
     AuthService auth(database, session, passwordHasher, recoveryCodeHasher);
 
+    // Subscriptions (Phase 4C). Every payment is SIMULATED: the gateway
+    // moves no money, has no secret keys and never sees card details.
+    // Started as "Finora.exe --billing-demo", the Subscription page also
+    // offers a button that ends the current billing period now, to show
+    // a renewal or an expiry live during a demonstration.
+    bool billingDemo = app.arguments().contains("--billing-demo");
+    SimulatedPaymentGateway paymentGateway;
+    SubscriptionService subscriptions(database, paymentGateway, billingDemo);
+
     // The controller shows the sign-in window first, then the main window.
     AppController controller(database, auth);
+    controller.setSubscriptionService(&subscriptions);
     controller.start();
 
     // Start the event loop: wait for user actions until the last window is

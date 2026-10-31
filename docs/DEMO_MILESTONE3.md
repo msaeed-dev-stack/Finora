@@ -4,7 +4,7 @@ A 10-minute script for showing the Transactions page to classmates or to the ins
 
 ## Before the demonstration
 
-1. Run `build.bat` and check the last lines say **100% tests passed, 0 tests failed out of 3**.
+1. Run `build.bat` and check the last lines say **100% tests passed, 0 tests failed out of 5** (five test programs since Milestone 4, Phase 4C).
 2. If your real database already holds records you care about, back it up first: close Finora, press **Win + R**, type `%LOCALAPPDATA%\Finora`, and copy `finora.db` somewhere safe.
 3. Close every Finora window. Only one copy can run at a time.
 4. Open `src/core/Money.cpp` and `src/ui/TransactionsPage.cpp` in your editor, ready to show.

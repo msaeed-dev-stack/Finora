@@ -19,6 +19,8 @@ struct Budget {
     std::string category;        // an expense category, for example "Food"
     std::string currencyCode;    // "PKR", "USD" or "EUR"
     long long limitMinor = 0;    // monthly limit in minor units: 2000000 means 20,000.00
+    bool paused = false;         // over the plan's limit of active budgets (Phase 4C):
+                                 // kept and shown, but not tracked
 };
 
 // How much of a budget is used. An enum gives each state a name, so the
@@ -70,5 +72,14 @@ BudgetProgress budgetProgressFor(const Budget &budget,
 std::vector<BudgetProgress> allBudgetProgress(const std::vector<Budget> &budgets,
                                               const std::vector<Transaction> &transactions,
                                               const std::string &month);
+
+// Sets `paused` on every budget. The `activeLimit` oldest budgets (the
+// smallest ids) stay active and the others are paused; a negative limit
+// (UNLIMITED_BUDGETS in Plans.h) pauses none. Nothing is ever deleted,
+// so after an upgrade every budget is active again.
+void markPausedBudgets(std::vector<Budget> &budgets, int activeLimit);
+
+// How many of the budgets are paused.
+int countPausedBudgets(const std::vector<Budget> &budgets);
 
 #endif // FINORA_BUDGET_H

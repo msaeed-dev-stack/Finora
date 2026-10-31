@@ -26,7 +26,7 @@ Last updated: Milestone 4, Phase 4B, 30 October 2026.
 - **Detailed explanation:** Freelancers often earn in USD or EUR and spend in PKR, which is why the database already stores a currency with every transaction.
 
 ### A4. What are the main features?
-- **Short answer:** Done: navigation, the Transactions page with add, edit, delete, search and filters, the dashboard, monthly budgets, a light and a dark theme, settings, a safe database upgrade, and local accounts with Argon2id passwords and one person's data per account. Planned: subscription plans (Phase 4C), goals, exchange rates and reports.
+- **Short answer:** Done: navigation, the Transactions page with add, edit, delete, search and filters, the dashboard, monthly budgets, a light and a dark theme, settings, a safe database upgrade, local accounts with Argon2id passwords and one person's data per account, and four subscription plans with a simulated checkout, plan rules checked below every screen, CSV export, a PDF summary and an audit history. Planned: goals, exchange rates, the Reports page and Business team features (they need a server).
 - **Detailed explanation:** See the feature table in `README.md` and sections K and L of this guide.
 
 ### A5. What are the scope and limitations?
@@ -492,7 +492,7 @@ Answer this after the project is complete.
 
 ### J1. Suggested live demonstration, Milestone 3
 The full step-by-step script is in `docs/DEMO_MILESTONE3.md`. In short:
-1. Run `build.bat` and show "100% tests passed, 0 tests failed out of 3".
+1. Run `build.bat` and show "100% tests passed, 0 tests failed out of 5" (five test programs since Phase 4C).
 2. Start `Finora.exe`, open Transactions, and add an expense of "1,200.50" PKR; point at "Will be saved as PKR 1,200.50".
 3. Try "12.345" and show the red message.
 4. Add an income in USD, then use search and the filters.
@@ -828,6 +828,108 @@ The full step-by-step script is in `docs/DEMO_MILESTONE3.md`. In short:
 
 ---
 
+## N. Milestone 4, Phase 4C: Subscription Plans and Billing
+
+### N1. What did Phase 4C add?
+- **Short answer:** Four plans, Finora Free ($0), Plus ($5.99), Pro ($12.99) and Business ($24.99) a month, with:
+  - plan rules that are checked inside the operations;
+  - a Subscription page and a simulated checkout;
+  - a billing history;
+  - CSV export (Plus), a monthly PDF summary (Pro) and an audit history (Business).
+- **Honest labels:** Payments are simulated. Unbuilt features say "Soon", and Business team features say "Online" (they need a server).
+- **Where in the code:** `src/core/Plans.h`, `src/core/Subscription.h`, `src/billing/`, `src/reports/`, `src/database/SubscriptionStore.cpp`, `src/ui/SubscriptionPage.cpp`.
+
+### N2. How do you stop a Free user from using a Plus feature through another screen?
+- **Short answer:** The check is not on the screen; it is inside the operation.
+  - `BudgetStore::addBudget` refuses a fourth budget on Free.
+  - `ReportExporter` refuses a CSV or PDF before it reads any record.
+  - `loadAuditHistory` refuses below Business.
+- **Detailed explanation:** All of them call one function, `DatabaseManager::requireFeature`. It asks the one table of entitlements, `FEATURES` in `Plans.h`. The plan comes from the signed-in person's own database row, never from the screen.
+  - Locks and "See plans" on the screens only save the person a wasted form.
+  - The tests call the stores and the exporter directly, without any screen, and they still refuse.
+
+### N3. What happens to a person's budgets when a paid plan ends?
+- **Short answer:** Nothing is deleted. On Free, the 3 oldest budgets stay active and the others are **paused**: still shown and still editable, but not tracked. After an upgrade, every budget is active again.
+- **Where in the code:** `markPausedBudgets` in `Budget.cpp` (nested loops: for each budget, count the older ones). `BudgetStore::loadBudgets` applies it on every screen.
+
+### N4. How does a payment work, and how can you be sure that no plan is switched on without one?
+- **Short answer:** `SubscriptionService::payForPlan`:
+  1. records the payment as pending;
+  2. asks the gateway;
+  3. on success, marks the payment succeeded **and** switches the plan on in one transaction.
+- **Detailed explanation:** The `UPDATE` that switches the plan has the condition `WHERE user_id = :owner AND EXISTS (a succeeded payment of this same person for this same plan)`. Without such a payment, no row changes and everything is rolled back.
+  - In a test, a fake gateway says "succeeded" but first moves the payment to another person, changes its plan, or marks it failed.
+  - The plan stays Free every time.
+
+### N5. Why is the payment simulated, and why is there no card form?
+- **Short answer:** A real payment needs a payment provider, a server and secret keys, and secret keys must never be inside a desktop program. Collecting card details would also need strict security certification.
+- **Detailed explanation:** The checkout says "Simulated payment: Finora collects no card details and no money moves." `PaymentRequest` has no card field, and the database has no card column; a test checks both. The provider column accepts only `simulated`.
+
+### N6. What is an abstract class, and where did you use one?
+- **Short answer:** A class with at least one pure virtual function (`= 0`), so no object of it can exist. `PaymentGateway` has four of them: `providerName`, `isSimulated`, `newReference` and `charge`.
+- **Detailed explanation:**
+  - `SimulatedPaymentGateway` inherits from it and overrides all four.
+  - `SubscriptionService` only knows a `PaymentGateway &`, so the call `payments.charge(request)` runs whichever gateway it was given (polymorphism).
+  - A real provider would be one more subclass; the service would not change.
+  - The base class has a virtual destructor.
+
+### N7. Explain the subscription statuses.
+- **Short answer:** Six statuses: Free, Trial, Active, Past due, Cancelled and Expired. `subscriptionAt(stored, now)` is the state machine for time:
+  - Active becomes Past due at the renewal date;
+  - Trial, Past due and Cancelled become Expired (Free) at their end of access.
+- **Example:** Plus paid on 31 October renews on 30 November. If it is not paid, it stays Plus for 7 more days of grace, then becomes Expired on Free.
+- **Where in the code:** the diagram is in `docs/DESIGN.md`, section 12.4.
+
+### N8. How do renewals work without a stored card?
+- **Short answer:** The person confirms each month's simulated payment ("Pay to renew"). With no card stored, nothing can honestly be charged automatically.
+- **Detailed explanation:** A real provider would keep the payment method and charge it, then tell Finora's server through a webhook.
+
+### N9. What happens if Finora crashes in the middle of a payment?
+- **Short answer:** The payment was recorded as "pending" before the gateway was asked. At the next start, `SubscriptionService` marks every pending payment as failed with the reason "Finora closed before this payment finished", and no plan was switched on.
+- **Detailed explanation:** Only one copy of Finora can run (the instance lock), so a pending payment at start-up can only be an interrupted one.
+
+### N10. How did you add the subscription tables without risking the existing data?
+- **Short answer:** It is the same safe upgrade as in Phase 4A:
+  - a verified backup;
+  - one transaction that only adds two tables and gives every account a Free row;
+  - checks;
+  - a rollback on any failure.
+- **Detailed explanation:** The test builds a real version 2 file with accounts, sessions, recovery codes, transactions and budgets. It upgrades the file, then compares every row of the 9 older tables before and after: identical, including every Argon2id hash. Amna can still sign in with her old password.
+
+### N11. What is CSV injection, and how does Finora prevent it?
+- **Short answer:** A spreadsheet runs a cell that starts with `=`, `+`, `-` or `@` as a formula, which can be an attack. `csvField` puts a `'` in front of such a field, so it is shown as text.
+- **Example:** A description `=HYPERLINK("http://evil.example","click")` is exported as `"'=HYPERLINK(""http://evil.example"",""click"")"`.
+
+### N12. Which real payment providers could Finora use from Pakistan?
+- **Short answer:** Not Stripe: Pakistan is not on Stripe's supported list. Options include:
+  - a merchant of record such as Paddle for customers abroad (Pakistan is not on its unsupported list, but Paddle still checks every seller, so that needs its own confirmation);
+  - local gateways such as Safepay (subscriptions), Easypaisa or JazzCash for PKR;
+  - Raast for instant bank payments.
+- **Detailed explanation:** Every option needs a server that holds the secret keys and verifies the providers' webhooks. The sources and the date checked are in `docs/DESIGN.md`, section 12.10.
+
+### N13. What are the limits of plans on a desktop program?
+- **Short answer:** Whoever owns the computer can edit `finora.db` or set the clock back, because the data is local. No program can stop the owner of a file.
+- **Detailed explanation:** Real enforcement needs Finora Online: the server keeps the subscription, and the app asks it for the plan. The design is ready for that (section 12.9), and the limit is documented honestly.
+
+### N14. How was Phase 4C tested?
+- **Short answer:** 161 checks in the new `finora_billing_tests`, plus new core and interface checks. In total 982 checks in 5 programs, passing in debug and release.
+- **Detailed explanation:** Among other things, the tests prove:
+  - the upgrade keeps every row;
+  - checks cannot be skipped by using another screen;
+  - a declined or tampered payment switches on no plan;
+  - every lifecycle change, including the trial and an expiry with paused budgets;
+  - the exports refuse on smaller plans and protect against injection;
+  - the checkout has no text field.
+
+### N15. Trace an upgrade from the button to the database.
+1. **The page.** The person clicks "Upgrade to Pro" on the Pro card. `SubscriptionPage::choosePlan` asks `SubscriptionService::changeFor`: an upgrade needs a payment, so the checkout opens.
+2. **The checkout.** "Confirm simulated payment of $12.99" calls `SubscriptionService::payForPlan(PLAN_PRO, false, reference)`.
+3. **The payment.** The service brings the subscription up to date, takes the price from `PLANS[PLAN_PRO]`, records a pending payment and calls `gateway.charge()`.
+4. **The database.** It calls `SubscriptionStore::activatePaidPlan`. In one transaction, the payment becomes succeeded and the plan becomes Pro, active until next month. The SQL guard makes sure the payment belongs to this person and this plan.
+5. **The screens.** The page reloads, the sidebar says "Finora Pro", a toast shows the reference, and the "PDF summary" button loses its lock.
+
+---
+
 ## Quick Revision
 
 - **Finora:** offline Windows finance app in C++17, Qt 6 Widgets and SQLite; Milestones 1 to 3 and Phase 4A of Milestone 4 are done.
@@ -850,5 +952,6 @@ The full step-by-step script is in `docs/DEMO_MILESTONE3.md`. In short:
 - **Loops:** `for` for fixed counts, `while (query.next())` for database rows.
 - **Accounts:** passwords stored only as Argon2id hashes (libsodium, MODERATE: 256 MiB, 3 passes) with unique salts; identical messages for a wrong password and an unknown email; waiting times after 3 failures; 10 hashed, single-use recovery codes; sessions end after sign-out, 15 idle minutes or 12 hours.
 - **Isolation:** `user_id IS :owner` in every query; the owner comes only from the `Session`, which only `AuthService` (a friend class) can change.
-- **Tests:** 241 core, 164 interface, 157 database and 106 account checks (668 in total), all passing on Windows on 30 October 2026.
-- **Not built yet:** subscription plans (Phase 4C), goals, exchange rates and reports. Say "planned for Phase 4C" or "Milestone N".
+- **Plans:** Free $0, Plus $5.99, Pro $12.99, Business $24.99 a month (proposed prices). One table of entitlements (`FEATURES`); checks inside `BudgetStore`, `ReportExporter` and `loadAuditHistory`; Free keeps 3 active budgets and pauses the rest; payments are SIMULATED (no card fields, no keys) and a plan switches on only with a succeeded payment of the same person and plan.
+- **Tests:** 338 core, 220 interface, 157 database, 106 account and 161 billing checks (982 in total), all passing on Windows on 31 October 2026.
+- **Not built yet:** goals, exchange rates, the Reports page, and Business team features (they need Finora Online, a server). Say "planned for Milestone N" or "needs Finora Online".

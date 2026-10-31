@@ -37,6 +37,10 @@ public:
     // Used by the tests and by the "+ Add Transaction" button.
     bool saveNewTransaction(Transaction &transaction);
 
+    // Writes a PDF summary of the month on screen (Finora Pro, Phase 4C).
+    // ReportExporter checks the plan itself. Public for the tests.
+    bool exportPdfTo(const QString &path);
+
     // The signed-in person's first name for the greeting, or "" without accounts.
     void setUserName(const QString &firstName);
 
@@ -53,6 +57,7 @@ signals:
 
 private slots:
     void onAddTransactionClicked();
+    void onPdfClicked();
     void onViewAllClicked();
     void onManageBudgetsClicked();
     void onChartOptionChanged();
@@ -84,6 +89,7 @@ private:
 
     QLabel *greetingLabel = nullptr;
     MonthSwitcher *switcher = nullptr;
+    QPushButton *pdfButton = nullptr;   // "PDF summary", locked below Finora Pro
     std::vector<WalletCard *> walletCards;
 
     MoneyFlowChart *flowChart = nullptr;

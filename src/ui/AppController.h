@@ -14,6 +14,7 @@
 #include "AuthWindow.h"
 #include "MainWindow.h"
 #include "auth/AuthService.h"
+#include "billing/SubscriptionService.h"
 #include "core/AccountRules.h"
 #include "database/DatabaseManager.h"
 
@@ -29,6 +30,10 @@ public:
 
     // Applies the theme of this installation and shows the sign-in window.
     void start();
+
+    // The service that changes plans (Phase 4C). main() sets it before
+    // start(); without it, the Subscription page only shows the plans.
+    void setSubscriptionService(SubscriptionService *service);
 
     AuthWindow *authWindow() const;
     MainWindow *mainWindow() const;   // nullptr while nobody is signed in
@@ -49,6 +54,7 @@ private:
 
     DatabaseManager &database;   // created in main(); used, not owned
     AuthService &auth;           // created in main(); used, not owned
+    SubscriptionService *subscriptions = nullptr;   // created in main(); used, not owned
     AuthWindow *signInWindow = nullptr;
     MainWindow *appWindow = nullptr;
     QTimer *sessionTimer = nullptr;

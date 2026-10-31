@@ -24,11 +24,13 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QStackedWidget>
 #include <QTableWidget>
 #include <QTemporaryDir>
+#include <QTextEdit>
 #include <QTimer>
 
 #include <iostream>
@@ -37,6 +39,8 @@
 
 #include "auth/AuthService.h"
 #include "auth/PasswordHasher.h"
+#include "billing/SimulatedPaymentGateway.h"
+#include "billing/SubscriptionService.h"
 #include "core/Budget.h"
 #include "core/Session.h"
 #include "core/Transaction.h"
@@ -44,13 +48,16 @@
 #include "database/DatabaseManager.h"
 #include "ui/AppController.h"
 #include "ui/AuthWindow.h"
+#include "ui/AuditHistoryDialog.h"
 #include "ui/BudgetDialog.h"
+#include "ui/CheckoutDialog.h"
 #include "ui/components/PasswordField.h"
 #include "ui/components/RecoveryCodesPanel.h"
 #include "ui/BudgetsPage.h"
 #include "ui/DashboardPage.h"
 #include "ui/MainWindow.h"
 #include "ui/SettingsPage.h"
+#include "ui/SubscriptionPage.h"
 #include "ui/Theme.h"
 #include "ui/TransactionDialog.h"
 #include "ui/TransactionsPage.h"
@@ -227,8 +234,8 @@ void testNavigation(TestCounter &counter, QApplication &app, MainWindow &window,
     }
 
     check(counter, "window title is Finora", window.windowTitle() == "Finora");
-    check(counter, "there are 7 pages", pageStack->count() == PAGE_COUNT);
-    check(counter, "there are 7 sidebar buttons", navGroup->buttons().size() == PAGE_COUNT);
+    check(counter, "there are 8 pages", pageStack->count() == PAGE_COUNT);
+    check(counter, "there are 8 sidebar buttons", navGroup->buttons().size() == PAGE_COUNT);
     check(counter, "starts on the dashboard", pageStack->currentIndex() == PAGE_DASHBOARD);
     check(counter, "dashboard button starts selected", navGroup->button(PAGE_DASHBOARD)->isChecked());
 
@@ -1209,6 +1216,449 @@ void testIdleSignOut(TestCounter &counter, QApplication &app, const QString &fol
                      == "For your security, Finora signed you out after 1 second without activity.");
 }
 
+// ---- Milestone 4, Phase 4C: the Subscription page ----
+
+QString lastMessageDetails;   // the informative text of the last answered message box
+
+// Clicks the button with this text in the open message box. Used for
+// boxes with buttons of their own, such as "See plans" and "Not now".
+void clickMessageBoxButton(const QString &text, const QString &screenshotName)
+{
+    QMessageBox *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+    if (box == nullptr) {
+        return;
+    }
+    lastMessageText = box->text();
+    lastMessageDetails = box->informativeText();
+    saveScreenshot(box, screenshotName);
+    QList<QAbstractButton *> buttons = box->buttons();
+    for (int i = 0; i < buttons.size(); i++) {
+        if (buttons[i]->text() == text) {
+            buttons[i]->click();
+            return;
+        }
+    }
+}
+
+void answerNotNow()
+{
+    clickMessageBoxButton("Not now", "c_budget_limit_question");
+}
+
+void answerSeePlans()
+{
+    clickMessageBoxButton("See plans", "c_budget_limit_question");
+}
+
+// The row of the comparison table whose first cell is `name`, or -1.
+int comparisonRow(QTableWidget *table, const QString &name)
+{
+    for (int row = 0; row < table->rowCount(); row++) {
+        if (table->item(row, 0)->text() == name) {
+            return row;
+        }
+    }
+    return -1;
+}
+
+void testSubscriptionPage(TestCounter &counter, QApplication &app, const QString &folder,
+                          const QString &screenshotFolder)
+{
+    // Without accounts (the Milestone 1 to 4A way), the page explains that
+    // plans belong to accounts.
+    {
+        DatabaseManager plainDatabase("ui_subscription_plain");
+        plainDatabase.open(folder + "/ui_subscription_plain.db");
+        MainWindow plain(plainDatabase);
+        SubscriptionPage *plainPage = plain.findChild<SubscriptionPage *>("subscriptionPage");
+        check(counter, "without accounts the Subscription page says that plans belong to accounts",
+              plainPage != nullptr && !plainPage->isSignedIn() && someLabelContains(plainPage, "Plans belong to accounts"));
+    }
+
+    Session session;
+    DatabaseManager database("ui_subscription");
+    database.open(folder + "/ui_subscription.db");
+    database.attachSession(session);
+    PasswordHasher quick(1, 8192);   // libsodium's smallest setting: these tests are about plans
+    AuthService auth(database, session, quick, quick);
+    std::vector<std::string> codes;
+    std::string password = "Correct Horse 9!";
+    check(counter, "an account for the subscription tests is created",
+          auth.signUp("Amna Siddiqui", "amna@example.com", password, codes));
+
+    MainWindow window(database, &auth);
+    window.resize(1280, 800);
+    window.show();
+    app.processEvents();
+    QButtonGroup *navGroup = window.findChild<QButtonGroup *>("navButtonGroup");
+    QStackedWidget *pageStack = window.findChild<QStackedWidget *>("pageStack");
+    SubscriptionPage *page = window.findChild<SubscriptionPage *>("subscriptionPage");
+    QPushButton *planChip = window.findChild<QPushButton *>("planChip");
+    if (navGroup == nullptr || pageStack == nullptr || page == nullptr || planChip == nullptr) {
+        check(counter, "the Subscription page and the plan chip exist", false);
+        return;
+    }
+
+    check(counter, "the sidebar shows the plan under the name: Finora Free",
+          planChip->isVisible() && planChip->text() == "Finora Free");
+    planChip->click();
+    app.processEvents();
+    check(counter, "clicking the plan opens the Subscription page",
+          pageStack->currentIndex() == PAGE_SUBSCRIPTION && navGroup->button(PAGE_SUBSCRIPTION)->isChecked());
+    check(counter, "the page shows Amna's own subscription: Finora Free",
+          page->isSignedIn() && page->shownSubscription().plan == PLAN_FREE
+              && page->shownSubscription().status == STATUS_FREE);
+    check(counter, "a banner says that billing is simulated and no card details are collected",
+          someLabelContains(page, "Simulated billing") && someLabelContains(page, "no card details"));
+
+    QList<QFrame *> cards = page->findChildren<QFrame *>("planCard");
+    int currentCards = 0;
+    bool freeIsCurrent = false;
+    for (int i = 0; i < cards.size(); i++) {
+        if (cards[i]->property("current").toBool()) {
+            currentCards++;
+            freeIsCurrent = cards[i]->accessibleName().startsWith("Finora Free");
+        }
+    }
+    check(counter, "four plan cards are shown", cards.size() == 4);
+    check(counter, "only the Free card is marked as the current plan", currentCards == 1 && freeIsCurrent);
+    check(counter, "the monthly prices are $0, $5.99, $12.99 and $24.99",
+          someLabelContains(page, "$0") && someLabelContains(page, "$5.99") && someLabelContains(page, "$12.99")
+              && someLabelContains(page, "$24.99"));
+
+    int builtFeatures = 0;
+    for (int f = 0; f < FEATURE_COUNT; f++) {
+        if (FEATURES[f].state == FEATURE_AVAILABLE) {
+            builtFeatures++;
+        }
+    }
+    check(counter, "a green tick appears only next to the features that are built",
+          page->findChildren<QLabel *>("featureMark").size() == builtFeatures
+              && page->findChildren<QLabel *>("featureMarkPlanned").size() == FEATURE_COUNT - builtFeatures);
+    check(counter, "Business says that its team features need Finora Online",
+          someLabelContains(page, "need Finora Online, which is planned"));
+
+    check(counter, "4 plan cards side by side at 1280 x 800", page->planColumns() == 4);
+    window.resize(1024, 700);
+    app.processEvents();
+    check(counter, "2 by 2 at the smallest window width (1024)", page->planColumns() == 2);
+    saveWindowScreenshot(window, screenshotFolder, "c_subscription_narrow");
+    window.resize(1280, 800);
+    app.processEvents();
+
+    QTableWidget *table = page->findChild<QTableWidget *>("featureTable");
+    check(counter, "the comparison has 27 rows (both budget features share one) and 5 columns",
+          table != nullptr && table->rowCount() == 27 && table->columnCount() == 5);
+    check(counter, "the comparison starts hidden", table->isHidden());
+    findButton(page, "Show the comparison")->click();
+    check(counter, "'Show the comparison' opens it", !table->isHidden() && findButton(page, "Hide the comparison") != nullptr);
+    int budgetsRow = comparisonRow(table, "Active budgets");
+    check(counter, "budgets: 'Up to 3' on Free and 'Unlimited' on Plus",
+          budgetsRow >= 0 && table->item(budgetsRow, 1)->text() == "Up to 3"
+              && table->item(budgetsRow, 2)->text() == "Unlimited");
+    int teamRow = comparisonRow(table, "Team members");
+    check(counter, "team members: not in Free, 'Online' in Business, never a tick",
+          teamRow >= 0 && table->item(teamRow, 1)->text() == QString::fromUtf8("—")
+              && table->item(teamRow, 4)->text() == "Online");
+    int goalsRow = comparisonRow(table, "Savings goals");
+    check(counter, "savings goals: 'Soon' on Plus, because they are not built yet",
+          goalsRow >= 0 && table->item(goalsRow, 2)->text() == "Soon");
+    saveWindowScreenshot(window, screenshotFolder, "c_subscription_free");
+    findButton(page, "Hide the comparison")->click();
+
+    QTableWidget *history = page->findChild<QTableWidget *>("historyTable");
+    check(counter, "the billing history is empty and says so",
+          history != nullptr && history->isHidden() && someLabelContains(page, "No payments yet"));
+
+    // ---- The Free limit from the screens ----
+    navGroup->button(PAGE_BUDGETS)->click();
+    app.processEvents();
+    BudgetsPage *budgetsPage = window.findChild<BudgetsPage *>("budgetsPage");
+    check(counter, "the Budgets page shows the plan's limit",
+          someLabelContains(budgetsPage, "Finora Free: 0 of 3 active budgets"));
+    Budget food;
+    food.category = "Food";
+    food.currencyCode = "PKR";
+    food.limitMinor = 2000000;
+    Budget rent = food;
+    rent.category = "Rent";
+    Budget health = food;
+    health.category = "Health";
+    bool threeSaved = budgetsPage->saveNewBudget(food) && budgetsPage->saveNewBudget(rent)
+                      && budgetsPage->saveNewBudget(health);
+    flushDeletedWidgets();
+    check(counter, "3 budgets are saved on Free, and the line says 3 of 3",
+          threeSaved && someLabelContains(budgetsPage, "Finora Free: 3 of 3 active budgets"));
+
+    lastMessageText.clear();
+    QTimer::singleShot(0, answerNotNow);
+    findButton(budgetsPage, "+  New Budget")->click();
+    check(counter, "at the limit, '+ New Budget' explains the plans instead of opening the form",
+          lastMessageText == "Budget limit reached" && lastMessageDetails.contains("Upgrade to Finora Plus"));
+    check(counter, "'Not now' stays on the Budgets page", pageStack->currentIndex() == PAGE_BUDGETS);
+    QTimer::singleShot(0, answerSeePlans);
+    findButton(budgetsPage, "+  New Budget")->click();
+    app.processEvents();
+    check(counter, "'See plans' opens the Subscription page", pageStack->currentIndex() == PAGE_SUBSCRIPTION);
+    check(counter, "the usage card shows 3 of 3 active budgets", someLabelContains(page, "3 of 3"));
+
+    // A screen that skips the question is still refused below it.
+    navGroup->button(PAGE_BUDGETS)->click();
+    Budget shopping = food;
+    shopping.category = "Shopping";
+    lastMessageText.clear();
+    QTimer::singleShot(0, answerNotNow);
+    bool fourthSaved = budgetsPage->saveNewBudget(shopping);
+    check(counter, "saving a fourth budget directly is refused by BudgetStore, with the same explanation",
+          !fourthSaved && lastMessageText == "Budget limit reached");
+
+    // ---- The dark theme ----
+    window.setDarkTheme(true);
+    navGroup->button(PAGE_SUBSCRIPTION)->click();
+    app.processEvents();
+    check(counter, "in the dark theme the page and the plan chip are drawn again",
+          window.isDarkTheme() && planChip->text() == "Finora Free");
+    saveWindowScreenshot(window, screenshotFolder, "c_subscription_dark");
+    window.setDarkTheme(false);
+    auth.signOut("signed_out");
+}
+
+// ---- Milestone 4, Phase 4C: the simulated checkout ----
+
+bool checkoutHadNoTextFields = false;
+bool checkoutSaidSimulated = false;
+QString checkoutDeclineMessage;
+
+// In the open checkout: look for text fields, decline once, then confirm.
+void declineThenConfirm()
+{
+    CheckoutDialog *dialog = qobject_cast<CheckoutDialog *>(QApplication::activeModalWidget());
+    if (dialog == nullptr) {
+        return;
+    }
+    saveScreenshot(dialog, "c_checkout");
+    checkoutHadNoTextFields = dialog->findChildren<QLineEdit *>().isEmpty()
+                              && dialog->findChildren<QTextEdit *>().isEmpty()
+                              && dialog->findChildren<QPlainTextEdit *>().isEmpty();
+    checkoutSaidSimulated = someLabelContains(dialog, "Simulated payment") && someLabelContains(dialog, "no card details");
+    findButton(dialog, "Simulate a declined payment")->click();
+    checkoutDeclineMessage = dialog->errorText();
+    saveScreenshot(dialog, "c_checkout_declined");
+    findButton(dialog, "Confirm simulated payment of $5.99")->click();
+}
+
+void answerKeepPlus()
+{
+    clickMessageBoxButton("Keep Finora Plus", "c_cancel_question");
+}
+
+void answerCancelSubscription()
+{
+    clickMessageBoxButton("Cancel subscription", "c_cancel_question");
+}
+
+void testCheckoutFromThePage(TestCounter &counter, QApplication &app, const QString &folder,
+                             const QString &screenshotFolder)
+{
+    Session session;
+    DatabaseManager database("ui_checkout");
+    database.open(folder + "/ui_checkout.db");
+    database.attachSession(session);
+    PasswordHasher quick(1, 8192);
+    AuthService auth(database, session, quick, quick);
+    std::vector<std::string> codes;
+    std::string password = "Correct Horse 9!";
+    auth.signUp("Amna Siddiqui", "amna@example.com", password, codes);
+    SimulatedPaymentGateway gateway;
+    SubscriptionService service(database, gateway, true);   // as with Finora.exe --billing-demo
+
+    MainWindow window(database, &auth, &service);
+    window.resize(1280, 800);
+    window.show();
+    app.processEvents();
+    QButtonGroup *navGroup = window.findChild<QButtonGroup *>("navButtonGroup");
+    SubscriptionPage *page = window.findChild<SubscriptionPage *>("subscriptionPage");
+    QPushButton *planChip = window.findChild<QPushButton *>("planChip");
+    BudgetsPage *budgetsPage = window.findChild<BudgetsPage *>("budgetsPage");
+    navGroup->button(PAGE_SUBSCRIPTION)->click();
+    app.processEvents();
+
+    QPushButton *choosePlus = findButton(page, "Choose Plus");
+    QPushButton *freeButton = findButton(page, "Current plan");
+    check(counter, "on Free, the Plus card offers 'Choose Plus' and the Free card cannot be clicked",
+          choosePlus != nullptr && choosePlus->isEnabled() && freeButton != nullptr && !freeButton->isEnabled());
+    check(counter, "the Pro card and the plan card offer the free trial",
+          findButton(page, "Try Pro free for 14 days") != nullptr);
+
+    QTimer::singleShot(0, declineThenConfirm);
+    choosePlus->click();
+    app.processEvents();
+    check(counter, "the checkout has no text field at all, so no card details can be typed", checkoutHadNoTextFields);
+    check(counter, "the checkout says that the payment is simulated and collects no card details", checkoutSaidSimulated);
+    check(counter, "a declined payment keeps the checkout open and explains it",
+          checkoutDeclineMessage.contains("declined") && checkoutDeclineMessage.contains("Your plan has not changed"));
+    check(counter, "after confirming, Amna is on Finora Plus",
+          page->shownSubscription().plan == PLAN_PLUS && page->shownSubscription().status == STATUS_ACTIVE);
+    check(counter, "the billing history shows both attempts: declined and paid", page->shownPaymentCount() == 2);
+    check(counter, "the sidebar now says Finora Plus", planChip->text() == "Finora Plus");
+    check(counter, "a toast confirms the simulated payment and its reference",
+          toastText(&window).startsWith("You are on Finora Plus. Simulated payment SIM-"));
+    saveWindowScreenshot(window, screenshotFolder, "c_subscription_plus");
+
+    navGroup->button(PAGE_BUDGETS)->click();
+    const char *categories[4] = {"Food", "Rent", "Health", "Shopping"};
+    bool fourSaved = true;
+    for (int i = 0; i < 4; i++) {
+        Budget budget;
+        budget.category = categories[i];
+        budget.currencyCode = "PKR";
+        budget.limitMinor = 100000;
+        fourSaved = fourSaved && budgetsPage->saveNewBudget(budget);
+    }
+    flushDeletedWidgets();
+    check(counter, "on Plus, a fourth budget is saved and the line says unlimited",
+          fourSaved && someLabelContains(budgetsPage, "Finora Plus: unlimited budgets"));
+
+    navGroup->button(PAGE_SUBSCRIPTION)->click();
+    QTimer::singleShot(0, answerKeepPlus);
+    findButton(page, "Cancel subscription")->click();
+    check(counter, "cancelling asks first, and 'Keep Finora Plus' changes nothing",
+          lastMessageText == "Cancel Finora Plus?" && page->shownSubscription().status == STATUS_ACTIVE);
+    QTimer::singleShot(0, answerCancelSubscription);
+    findButton(page, "Cancel subscription")->click();
+    app.processEvents();
+    check(counter, "after confirming, Plus is cancelled but stays until the end of the period",
+          page->shownSubscription().status == STATUS_CANCELLED && page->shownSubscription().plan == PLAN_PLUS
+              && planChip->text().startsWith(QString::fromUtf8("Plus · ends")));
+    check(counter, "a cancelled plan offers 'Resume Finora Plus'", findButton(page, "Resume Finora Plus") != nullptr);
+
+    findButton(page, "Demo: end this period now")->click();
+    app.processEvents();
+    check(counter, "the demonstration button ends the period: Finora Free applies",
+          page->shownSubscription().status == STATUS_EXPIRED && planChip->text() == "Finora Free");
+    navGroup->button(PAGE_BUDGETS)->click();
+    flushDeletedWidgets();
+    check(counter, "back on Free, all 4 budgets are shown and the newest one is paused, not deleted",
+          budgetsPage->shownProgress().size() == 4 && someLabelContains(budgetsPage, "Paused on Finora Free")
+              && someLabelContains(budgetsPage, "3 of 3 active budgets, 1 paused"));
+    saveWindowScreenshot(window, screenshotFolder, "c_budgets_paused");
+
+    navGroup->button(PAGE_SUBSCRIPTION)->click();
+    findButton(page, "Try Pro free for 14 days")->click();
+    app.processEvents();
+    check(counter, "the free Pro trial starts from the page, and the sidebar says 'Pro trial'",
+          page->shownSubscription().status == STATUS_TRIAL && planChip->text() == "Pro trial"
+              && someLabelContains(page, "Your free Pro trial ends on"));
+    saveWindowScreenshot(window, screenshotFolder, "c_subscription_trial");
+    auth.signOut("signed_out");
+}
+
+// ---- Milestone 4, Phase 4C: exports and the audit history ----
+
+int auditRowsShown = -1;
+
+void readAuditHistoryAndClose()
+{
+    AuditHistoryDialog *dialog = qobject_cast<AuditHistoryDialog *>(QApplication::activeModalWidget());
+    if (dialog == nullptr) {
+        return;
+    }
+    auditRowsShown = dialog->shownEventCount();
+    saveScreenshot(dialog, "c_audit_history");
+    dialog->accept();
+}
+
+// The first bytes of a file, to check what kind of file it is.
+QByteArray fileStart(const QString &path, int size)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return QByteArray();
+    }
+    return file.read(size);
+}
+
+void testExportsFromTheScreens(TestCounter &counter, QApplication &app, const QString &folder)
+{
+    Session session;
+    DatabaseManager database("ui_exports");
+    database.open(folder + "/ui_exports.db");
+    database.attachSession(session);
+    PasswordHasher quick(1, 8192);
+    AuthService auth(database, session, quick, quick);
+    std::vector<std::string> codes;
+    std::string password = "Correct Horse 9!";
+    auth.signUp("Amna Siddiqui", "amna@example.com", password, codes);
+    SimulatedPaymentGateway gateway;
+    SubscriptionService service(database, gateway);
+    std::string reference;
+
+    MainWindow window(database, &auth, &service);
+    window.resize(1280, 800);
+    window.show();
+    app.processEvents();
+    QButtonGroup *navGroup = window.findChild<QButtonGroup *>("navButtonGroup");
+    QStackedWidget *pageStack = window.findChild<QStackedWidget *>("pageStack");
+    TransactionsPage *transactionsPage = window.findChild<TransactionsPage *>("transactionsPage");
+    DashboardPage *dashboard = window.findChild<DashboardPage *>("dashboardPage");
+    SettingsPage *settings = window.findChild<SettingsPage *>("settingsPage");
+
+    // ---- CSV export: Finora Plus ----
+    navGroup->button(PAGE_TRANSACTIONS)->click();
+    QPushButton *exportButton = findButton(transactionsPage, "Export CSV");
+    check(counter, "on Free, 'Export CSV' shows a lock", exportButton != nullptr && !exportButton->icon().isNull());
+    lastMessageText.clear();
+    QTimer::singleShot(0, answerSeePlans);
+    exportButton->click();
+    app.processEvents();
+    check(counter, "on Free, 'Export CSV' explains that it is part of Finora Plus, and 'See plans' opens the plans",
+          lastMessageText == "CSV export" && lastMessageDetails.contains("Finora Plus")
+              && pageStack->currentIndex() == PAGE_SUBSCRIPTION);
+
+    service.payForPlan(PLAN_PLUS, false, reference);
+    navGroup->button(PAGE_TRANSACTIONS)->click();
+    QString csvPath = folder + "/ui_export.csv";
+    check(counter, "on Plus, the lock is gone and the export writes the file",
+          exportButton->icon().isNull() && transactionsPage->exportCsvTo(csvPath)
+              && fileStart(csvPath, 3) == QByteArray("\xEF\xBB\xBF"));
+    check(counter, "a toast says how many transactions were exported",
+          toastText(&window) == "Exported 0 transactions to ui_export.csv.");
+
+    // ---- PDF summary: Finora Pro ----
+    navGroup->button(PAGE_DASHBOARD)->click();
+    QPushButton *pdfButton = findButton(dashboard, "PDF summary");
+    check(counter, "on Plus, 'PDF summary' on the dashboard shows a lock", pdfButton != nullptr && !pdfButton->icon().isNull());
+    lastMessageText.clear();
+    QTimer::singleShot(0, answerNotNow);
+    pdfButton->click();
+    check(counter, "and explains that it is part of Finora Pro",
+          lastMessageText == "PDF summary" && lastMessageDetails.contains("Finora Pro")
+              && pageStack->currentIndex() == PAGE_DASHBOARD);
+    service.payForPlan(PLAN_PRO, false, reference);
+    navGroup->button(PAGE_DASHBOARD)->click();
+    QString pdfPath = folder + "/ui_summary.pdf";
+    check(counter, "on Pro, the dashboard saves the month on screen as a PDF file",
+          pdfButton->icon().isNull() && dashboard->exportPdfTo(pdfPath) && fileStart(pdfPath, 4) == QByteArray("%PDF"));
+
+    // ---- Audit history: Finora Business ----
+    navGroup->button(PAGE_SETTINGS)->click();
+    QPushButton *viewButton = findButton(settings, "View");
+    check(counter, "on Pro, the audit history in Settings shows a lock", viewButton != nullptr && !viewButton->icon().isNull());
+    lastMessageText.clear();
+    QTimer::singleShot(0, answerNotNow);
+    viewButton->click();
+    check(counter, "and explains that it is part of Finora Business",
+          lastMessageText == "Audit history" && lastMessageDetails.contains("Finora Business"));
+    service.payForPlan(PLAN_BUSINESS, false, reference);
+    navGroup->button(PAGE_SETTINGS)->click();
+    auditRowsShown = -1;
+    QTimer::singleShot(0, readAuditHistoryAndClose);
+    viewButton->click();
+    check(counter, "on Business, 'View' opens the account's audit history",
+          viewButton->icon().isNull() && auditRowsShown >= 6);
+    auth.signOut("signed_out");
+}
+
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
@@ -1257,6 +1707,11 @@ int main(int argc, char *argv[])
     check(counter, "libsodium starts", PasswordHasher::initializeLibrary());
     testAccountsWindow(counter, app, temporaryFolder.path(), screenshotFolder);
     testIdleSignOut(counter, app, temporaryFolder.path());
+
+    std::cout << "---- Milestone 4, Phase 4C: the Subscription page ----\n";
+    testSubscriptionPage(counter, app, temporaryFolder.path(), screenshotFolder);
+    testCheckoutFromThePage(counter, app, temporaryFolder.path(), screenshotFolder);
+    testExportsFromTheScreens(counter, app, temporaryFolder.path());
 
     std::cout << "----------------------\n";
     std::cout << counter.checksRun << " checks, " << counter.checksFailed << " failed\n";

@@ -71,11 +71,23 @@ bool AppController::eventFilter(QObject *watched, QEvent *event)
     return QObject::eventFilter(watched, event);   // never stops the event
 }
 
+void AppController::setSubscriptionService(SubscriptionService *service)
+{
+    subscriptions = service;
+}
+
 void AppController::onSignedIn(bool newAccount)
 {
     signInWindow->hide();
 
-    appWindow = new MainWindow(database, &auth);
+    // What time has done to the plan since the last visit (a renewal date
+    // or the end of a trial) is saved now, with its audit event.
+    if (subscriptions != nullptr) {
+        Subscription upToDate;
+        subscriptions->refresh(upToDate);
+    }
+
+    appWindow = new MainWindow(database, &auth, subscriptions);
     connect(appWindow, &MainWindow::signOutRequested, this, &AppController::onSignOutRequested);
     appWindow->show();
 

@@ -13,6 +13,9 @@
 #include <QStandardPaths>
 #include <QVariant>
 
+#include "SubscriptionStore.h"
+#include "core/Subscription.h"
+
 // ---- Helpers used only in this file ----------------------------------
 
 // Fills the placeholders :type, :amount, :currency, :category,
@@ -219,6 +222,51 @@ bool DatabaseManager::signedInUserId(int &userId) const
     }
     userId = attachedSession->userId();
     return true;
+}
+
+bool DatabaseManager::accountsInUse() const
+{
+    return attachedSession != nullptr;
+}
+
+PlanId DatabaseManager::currentPlan()
+{
+    // No account (no Session, or nobody signed in): the Free rules apply.
+    int userId = 0;
+    if (!opened || !signedInUserId(userId)) {
+        return PLAN_FREE;
+    }
+
+    // The signed-in person's own subscription row. If it cannot be read,
+    // the answer is Free, so a paid feature is refused, never allowed.
+    SubscriptionStore store(*this);
+    Subscription subscription;
+    if (!store.loadSubscription(subscription)) {
+        return PLAN_FREE;
+    }
+
+    // planAt() also applies every deadline that has passed: a paid period
+    // that ended a minute ago no longer counts, even before its row is updated.
+    std::string now = QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString();
+    return planAt(subscription, now);
+}
+
+bool DatabaseManager::requireFeature(Feature feature)
+{
+    errorMessage.clear();
+    PlanId plan = currentPlan();
+    if (!featureAvailable(feature) || !planIncludes(plan, feature)) {
+        return fail(QString::fromStdString(lockedFeatureMessage(feature, plan)));
+    }
+    return true;
+}
+
+int DatabaseManager::budgetLimit()
+{
+    if (!accountsInUse()) {
+        return UNLIMITED_BUDGETS;   // no accounts, so no plans (the Milestone 2 to 4A tests)
+    }
+    return activeBudgetLimit(currentPlan());
 }
 
 int DatabaseManager::schemaVersion()
@@ -463,12 +511,15 @@ bool DatabaseManager::enableForeignKeys()
     return true;
 }
 
-// Brings the tables up to CURRENT_SCHEMA_VERSION, one version at a time:
+// Brings the tables up to CURRENT_SCHEMA_VERSION, one version at a time,
+// all inside one database transaction:
 //   version 0       a new, empty file: create the version 1 tables, then
-//                   upgrade them to version 2 in the same transaction
+//                   upgrade them to version 2 and to version 3
 //   version 1       a file from Milestone 2 or 3: save and check a backup,
-//                   then upgrade it to version 2
-//   version 2       already up to date: nothing to do
+//                   then upgrade it to version 2 and to version 3
+//   version 2       a file from Phase 4A or 4B: save and check a backup,
+//                   then upgrade it to version 3
+//   version 3       already up to date: nothing to do
 //   higher version  made by a newer Finora: refuse and leave the file untouched
 bool DatabaseManager::upgradeSchema()
 {
@@ -504,6 +555,9 @@ bool DatabaseManager::upgradeSchema()
     }
     if (ok && version < 2) {
         ok = upgradeToVersion2();
+    }
+    if (ok && version < 3) {
+        ok = upgradeToVersion3();
     }
 
     // Every foreign key must still point to an existing row.
@@ -621,8 +675,14 @@ bool DatabaseManager::backupBeforeUpgrade(int fromVersion)
         number++;
     }
 
+    // What the copy must contain: every transaction and, from version 2
+    // on, every account.
     long long transactionCount = 0;
+    long long accountCount = 0;
     if (!readNumber("SELECT COUNT(*) FROM transactions", transactionCount)) {
+        return false;
+    }
+    if (fromVersion >= 2 && !readNumber("SELECT COUNT(*) FROM users", accountCount)) {
         return false;
     }
 
@@ -639,7 +699,7 @@ bool DatabaseManager::backupBeforeUpgrade(int fromVersion)
                     + " The database was not changed.");
     }
 
-    if (!verifyBackup(path, fromVersion, transactionCount)) {
+    if (!verifyBackup(path, fromVersion, transactionCount, accountCount)) {
         return false;
     }
     backupPath = path;
@@ -647,10 +707,11 @@ bool DatabaseManager::backupBeforeUpgrade(int fromVersion)
 }
 
 // Opens the backup through a second, read-only connection and checks it:
-// SQLite's own integrity check, the schema version and the number of
-// transactions must all be right before the upgrade may start.
+// SQLite's own integrity check, the schema version, the number of
+// transactions and (from version 2 on) the number of accounts must all
+// be right before the upgrade may start.
 bool DatabaseManager::verifyBackup(const QString &backupFile, int expectedVersion,
-                                   long long expectedTransactions)
+                                   long long expectedTransactions, long long expectedAccounts)
 {
     QString problem;
     QString checkName = connectionName + "_backup_check";
@@ -671,6 +732,10 @@ bool DatabaseManager::verifyBackup(const QString &backupFile, int expectedVersio
             } else if (!query.exec("SELECT COUNT(*) FROM transactions") || !query.next()
                        || query.value(0).toLongLong() != expectedTransactions) {
                 problem = "the copy does not hold every transaction";
+            } else if (expectedVersion >= 2
+                       && (!query.exec("SELECT COUNT(*) FROM users") || !query.next()
+                           || query.value(0).toLongLong() != expectedAccounts)) {
+                problem = "the copy does not hold every account";
             }
         }   // `query` is destroyed here
         backup.close();
@@ -864,6 +929,95 @@ bool DatabaseManager::upgradeToVersion2()
     return ok;
 }
 
+// Version 2 -> 3 (Phase 4C). Runs inside the transaction started by
+// upgradeSchema(). It only ADDS two tables and fills one of them: no
+// existing table, row or password hash is changed.
+bool DatabaseManager::upgradeToVersion3()
+{
+    long long accountsBefore = 0;
+    if (!readNumber("SELECT COUNT(*) FROM users", accountsBefore)) {
+        return false;
+    }
+
+    // ---- 1. One subscription per account: its plan, status and dates ----
+    // The CHECK rules are a second line of defence behind the C++ rules:
+    // the plan and the status must agree, an active plan needs a renewal
+    // date, and every paid status needs the time when its access ends.
+    // UNIQUE (id, user_id) lets a payment name its subscription AND owner.
+    bool ok = runStatement(
+        "CREATE TABLE subscriptions ("
+        "  id                     INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  user_id                INTEGER NOT NULL UNIQUE REFERENCES users (id) ON DELETE CASCADE,"
+        "  plan                   TEXT NOT NULL CHECK (plan IN ('free', 'plus', 'pro', 'business')),"
+        "  status                 TEXT NOT NULL CHECK (status IN ('free', 'trial', 'active', 'past_due', "
+        "                                                         'cancelled', 'expired')),"
+        "  started_at             TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),"
+        "  renews_at              TEXT,"
+        "  expires_at             TEXT,"
+        "  cancelled_at           TEXT,"
+        "  scheduled_plan         TEXT CHECK (scheduled_plan IN ('plus', 'pro')),"
+        "  trial_used             INTEGER NOT NULL DEFAULT 0 CHECK (trial_used IN (0, 1)),"
+        "  last_payment_reference TEXT,"
+        "  last_payment_status    TEXT CHECK (last_payment_status IN ('succeeded', 'failed')),"
+        "  updated_at             TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),"
+        "  UNIQUE (id, user_id),"
+        "  CHECK ((plan = 'free') = (status IN ('free', 'expired'))),"
+        "  CHECK (status <> 'active' OR renews_at IS NOT NULL),"
+        "  CHECK (status NOT IN ('trial', 'active', 'past_due', 'cancelled') OR expires_at IS NOT NULL)"
+        ")");
+
+    // ---- 2. The billing history: every payment attempt ----
+    // There is no column for card details, because Finora never collects
+    // them. 'simulated' is the only provider: a real one needs a server.
+    // The two-column foreign key makes sure that a payment's subscription
+    // belongs to the same person as the payment.
+    if (ok) {
+        ok = runStatement(
+            "CREATE TABLE payments ("
+            "  id              INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  user_id         INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,"
+            "  subscription_id INTEGER NOT NULL,"
+            "  plan            TEXT NOT NULL CHECK (plan IN ('plus', 'pro', 'business')),"
+            "  reason          TEXT NOT NULL CHECK (reason IN ('new', 'upgrade', 'renewal')),"
+            "  amount_minor    INTEGER NOT NULL CHECK (amount_minor > 0 AND amount_minor <= 1000000),"
+            "  currency_code   TEXT NOT NULL DEFAULT 'USD' REFERENCES currencies (code),"
+            "  status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'succeeded', 'failed')),"
+            "  provider        TEXT NOT NULL DEFAULT 'simulated' CHECK (provider IN ('simulated')),"
+            "  reference       TEXT NOT NULL UNIQUE CHECK (length(reference) BETWEEN 8 AND 40),"
+            "  failure_reason  TEXT,"
+            "  period_start    TEXT,"
+            "  period_end      TEXT,"
+            "  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),"
+            "  completed_at    TEXT,"
+            "  FOREIGN KEY (subscription_id, user_id) REFERENCES subscriptions (id, user_id) ON DELETE CASCADE,"
+            "  CHECK (status <> 'succeeded' OR (period_start IS NOT NULL AND period_end IS NOT NULL"
+            "                                   AND completed_at IS NOT NULL)),"
+            "  CHECK (status <> 'failed' OR (failure_reason IS NOT NULL AND completed_at IS NOT NULL))"
+            ")");
+    }
+    if (ok) {
+        ok = runStatement("CREATE INDEX payments_by_owner ON payments (user_id, created_at)");
+    }
+
+    // ---- 3. Every existing account starts on Finora Free, from the day
+    //         the account was created ----
+    if (ok) {
+        ok = runStatement("INSERT INTO subscriptions (user_id, plan, status, started_at) "
+                          "SELECT id, 'free', 'free', created_at FROM users");
+    }
+
+    // ---- 4. Prove that every account received exactly one subscription ----
+    long long subscriptionsAfter = -1;
+    if (ok) {
+        ok = readNumber("SELECT COUNT(*) FROM subscriptions", subscriptionsAfter);
+    }
+    if (ok && subscriptionsAfter != accountsBefore) {
+        return fail("Not every account received the Free plan (" + QString::number(subscriptionsAfter)
+                    + " of " + QString::number(accountsBefore) + ").");
+    }
+    return ok;
+}
+
 // PRAGMA foreign_key_check lists every row whose foreign key points to a
 // row that does not exist. An empty result means every link is valid.
 bool DatabaseManager::checkForeignKeys()
@@ -964,6 +1118,39 @@ bool DatabaseManager::recordAuditEvent(const QString &eventType, const QString &
     query.bindValue(":details", details);
     if (!query.exec()) {
         return fail("Could not record an event: " + query.lastError().text());
+    }
+    return true;
+}
+
+bool DatabaseManager::loadAuditHistory(std::vector<AuditEvent> &events, int limit)
+{
+    events.clear();
+    if (!opened) {
+        return fail("The database is not open.");
+    }
+    if (!requireFeature(FEATURE_AUDIT_HISTORY)) {
+        return false;   // requireFeature() has explained which plan is needed
+    }
+    int userId = 0;
+    if (!signedInUserId(userId)) {
+        return fail("Please sign in first.");
+    }
+
+    // Only this person's own events: user_id comes from the Session.
+    QSqlQuery query(QSqlDatabase::database(connectionName, false));
+    query.prepare("SELECT event_type, details, created_at FROM audit_events "
+                  "WHERE user_id = :owner ORDER BY id DESC LIMIT :limit");
+    query.bindValue(":owner", userId);
+    query.bindValue(":limit", limit);
+    if (!query.exec()) {
+        return fail("Could not load the audit history: " + query.lastError().text());
+    }
+    while (query.next()) {
+        AuditEvent event;
+        event.eventType = query.value(0).toString().toStdString();
+        event.details = query.value(1).toString().toStdString();
+        event.createdAt = query.value(2).toString().toStdString();
+        events.push_back(event);
     }
     return true;
 }

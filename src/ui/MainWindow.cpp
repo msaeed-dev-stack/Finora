@@ -14,7 +14,9 @@
 #include "PlaceholderPage.h"
 #include "Theme.h"
 #include "TransactionsPage.h"
+#include "UiHelpers.h"
 #include "components/Toast.h"
+#include "database/SubscriptionStore.h"
 
 // ---- Text for the pages that are not built yet ----------------------
 // One structure per page, in page-number order (see Sidebar.h). Only
@@ -41,14 +43,18 @@ const PageInfo PAGE_INFO[PAGE_COUNT] = {
      "Totals by month, category and type, plus export to a CSV file."},
     {"Currency Settings", "Manage currencies and exchange rates", "currency", 5,
      "PKR, USD and EUR, with exchange rates that you enter yourself."},
+    {"Subscription", "Your plan, your billing history and what each plan includes", "subscription", 4,
+     "Plans, the billing history and a simulated checkout."},
     {"Settings", "Appearance, your data and information about Finora", "settings", 4,
      "Theme, reduced motion and where your data is kept."}
 };
 
 // The initializer list sets the reference member `database` and builds
 // the BudgetStore member with the same database.
-MainWindow::MainWindow(DatabaseManager &sharedDatabase, AuthService *sharedAuth, QWidget *parent)
-    : QMainWindow(parent), database(sharedDatabase), auth(sharedAuth), budgetStore(sharedDatabase)
+MainWindow::MainWindow(DatabaseManager &sharedDatabase, AuthService *sharedAuth,
+                       SubscriptionService *sharedSubscriptions, QWidget *parent)
+    : QMainWindow(parent), database(sharedDatabase), auth(sharedAuth), subscriptions(sharedSubscriptions),
+      budgetStore(sharedDatabase)
 {
     setWindowTitle("Finora");
     setWindowIcon(QIcon(":/icons/logo.svg"));
@@ -98,6 +104,12 @@ void MainWindow::showPage(int pageNumber)
     sidebar->setCurrentPage(pageNumber);      // highlight its button
     pages[pageNumber]->refresh();             // virtual call: the page's own refresh()
     fadeInPage(pages[pageNumber]);
+
+    // A plan can change on the Subscription page or end with time, so
+    // the plan under the name is read again whenever a page is shown.
+    if (auth != nullptr) {
+        showPlanIndicator();
+    }
 }
 
 void MainWindow::setDarkTheme(bool dark)
@@ -149,6 +161,19 @@ void MainWindow::showAccount()
     const Session &session = auth->session();
     sidebar->showAccount(QString::fromStdString(session.displayName()), QString::fromStdString(session.email()));
     dashboardPage->setUserName(QString::fromStdString(session.firstName()));
+    showPlanIndicator();
+}
+
+// The person's plan under the name in the sidebar (Phase 4C).
+void MainWindow::showPlanIndicator()
+{
+    SubscriptionStore store(database);
+    Subscription stored;
+    if (!store.loadSubscription(stored)) {
+        return;   // nobody signed in: the account area is not shown anyway
+    }
+    Subscription now = subscriptionAt(stored, currentUtcTime());
+    sidebar->showPlan(planChipText(now), planChipTone(now));
 }
 
 void MainWindow::toggleTheme()
@@ -201,16 +226,29 @@ void MainWindow::createPages()
             page = dashboardPage;
             break;
         }
-        case PAGE_TRANSACTIONS:
-            page = new TransactionsPage(database, pageStack);
+        case PAGE_TRANSACTIONS: {
+            TransactionsPage *transactionsPage = new TransactionsPage(database, pageStack);
+            connect(transactionsPage, &TransactionsPage::openPageRequested, this, &MainWindow::showPage);
+            page = transactionsPage;
             break;
-        case PAGE_BUDGETS:
-            page = new BudgetsPage(database, budgetStore, pageStack);
+        }
+        case PAGE_BUDGETS: {
+            BudgetsPage *budgetsPage = new BudgetsPage(database, budgetStore, pageStack);
+            connect(budgetsPage, &BudgetsPage::openPageRequested, this, &MainWindow::showPage);
+            page = budgetsPage;
+            break;
+        }
+        case PAGE_SUBSCRIPTION:
+            subscriptionPage = new SubscriptionPage(database, budgetStore, subscriptions, pageStack);
+            connect(subscriptionPage, &SubscriptionPage::openPageRequested, this, &MainWindow::showPage);
+            connect(subscriptionPage, &SubscriptionPage::planChanged, this, &MainWindow::showPlanIndicator);
+            page = subscriptionPage;
             break;
         case PAGE_SETTINGS:
             settingsPage = new SettingsPage(database, auth, pageStack);
             connect(settingsPage, &SettingsPage::darkThemeChosen, this, &MainWindow::setDarkTheme);
             connect(settingsPage, &SettingsPage::reducedMotionChosen, this, &MainWindow::setReducedMotionEnabled);
+            connect(settingsPage, &SettingsPage::openPageRequested, this, &MainWindow::showPage);
             page = settingsPage;
             break;
         default:

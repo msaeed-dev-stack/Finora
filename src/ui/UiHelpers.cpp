@@ -4,7 +4,10 @@
 #include "UiHelpers.h"
 
 #include <QDate>
+#include <QDateTime>
 #include <QLayoutItem>
+#include <QMessageBox>
+#include <QPushButton>
 #include <QWidget>
 
 #include "Theme.h"
@@ -71,5 +74,97 @@ void clearLayout(QLayout *layout)
         }
         delete item;
         item = layout->takeAt(0);
+    }
+}
+
+// ---- Subscriptions (Phase 4C) ---------------------------------------------
+
+std::string currentUtcTime()
+{
+    return QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString();
+}
+
+QString dateText(const std::string &utcTime)
+{
+    QDateTime time = QDateTime::fromString(QString::fromStdString(utcTime), Qt::ISODate);
+    if (!time.isValid()) {
+        return QString();
+    }
+    return time.toLocalTime().toString("d MMM yyyy");
+}
+
+int daysUntil(const std::string &utcTime)
+{
+    QDateTime end = QDateTime::fromString(QString::fromStdString(utcTime), Qt::ISODate);
+    if (!end.isValid()) {
+        return 0;
+    }
+    long long seconds = QDateTime::currentDateTimeUtc().secsTo(end);
+    if (seconds <= 0) {
+        return 0;
+    }
+    // A part of a day counts as a whole day: 13.5 days left shows as 14.
+    return static_cast<int>((seconds + 86399) / 86400);
+}
+
+QString shortPlanName(PlanId plan)
+{
+    QString name = QString::fromStdString(planName(plan));   // "Finora Pro"
+    return name.mid(QString("Finora ").length());           // "Pro"
+}
+
+QString planChipText(const Subscription &subscription)
+{
+    QString name = shortPlanName(subscription.plan);
+    switch (subscription.status) {
+    case STATUS_TRIAL:
+        return name + " trial";
+    case STATUS_ACTIVE:
+        return "Finora " + name;
+    case STATUS_PAST_DUE:
+        return QString::fromUtf8("%1 · payment due").arg(name);
+    case STATUS_CANCELLED:
+        return QString::fromUtf8("%1 · ends %2").arg(name, dateText(subscription.expiresAt));
+    case STATUS_FREE:
+    case STATUS_EXPIRED:
+        break;
+    }
+    return "Finora Free";
+}
+
+QString planChipTone(const Subscription &subscription)
+{
+    if (subscription.status == STATUS_PAST_DUE) {
+        return "warning";
+    }
+    if (subscription.status == STATUS_TRIAL || subscription.status == STATUS_ACTIVE) {
+        return "info";
+    }
+    return "neutral";
+}
+
+bool askToSeePlans(QWidget *parent, const QString &title, const QString &explanation)
+{
+    QMessageBox box(parent);
+    box.setIcon(QMessageBox::Information);
+    box.setWindowTitle(title);
+    box.setText(title);
+    box.setInformativeText(explanation);
+    QPushButton *seePlans = box.addButton("See plans", QMessageBox::AcceptRole);
+    QPushButton *notNow = box.addButton("Not now", QMessageBox::RejectRole);
+    box.setDefaultButton(notNow);
+    box.exec();
+    return box.clickedButton() == seePlans;
+}
+
+void showLockIfNeeded(QPushButton *button, bool locked, const QString &planNeeded)
+{
+    if (locked) {
+        button->setIcon(QIcon(tintedIcon("lock", themeColors().textMuted, 16)));
+        button->setIconSize(QSize(16, 16));
+        button->setToolTip("Part of " + planNeeded + ". Click to see the plans.");
+    } else {
+        button->setIcon(QIcon());
+        button->setToolTip(QString());
     }
 }

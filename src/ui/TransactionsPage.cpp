@@ -7,15 +7,22 @@
 #include <QColor>
 #include <QDate>
 #include <QDialog>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QMessageBox>
+#include <QStandardPaths>
 #include <QVBoxLayout>
 
 #include "PageHeader.h"
+#include "Sidebar.h"   // PAGE_SUBSCRIPTION
 #include "Theme.h"
 #include "TransactionDialog.h"
+#include "UiHelpers.h"
+#include "components/Toast.h"
 #include "core/Money.h"
+#include "reports/ReportExporter.h"
 
 // ---- Table columns -------------------------------------------------
 const int COLUMN_DATE = 0;
@@ -76,15 +83,22 @@ QWidget *TransactionsPage::createHeader()
     addButton->setObjectName("primaryButton");
     addButton->setAccessibleName("Add Transaction");
 
+    // Phase 4C: a CSV file of every transaction, for Finora Plus and larger.
+    exportButton = new QPushButton("Export CSV", header);
+    exportButton->setObjectName("secondaryButton");
+    exportButton->setCursor(Qt::PointingHandCursor);
+
     QHBoxLayout *layout = new QHBoxLayout(header);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(8);
     layout->addWidget(new PageHeader("Transactions", "Manage your income and expenses", header));
     layout->addStretch();
+    layout->addWidget(exportButton);
     layout->addWidget(editButton);
     layout->addWidget(deleteButton);
     layout->addWidget(addButton);
 
+    connect(exportButton, &QPushButton::clicked, this, &TransactionsPage::onExportClicked);
     connect(addButton, &QPushButton::clicked, this, &TransactionsPage::onAddClicked);
     connect(editButton, &QPushButton::clicked, this, &TransactionsPage::onEditClicked);
     connect(deleteButton, &QPushButton::clicked, this, &TransactionsPage::onDeleteClicked);
@@ -249,6 +263,43 @@ void TransactionsPage::reloadTransactions()
 void TransactionsPage::refresh()
 {
     reloadTransactions();
+    bool locked = !planIncludes(database.currentPlan(), FEATURE_CSV_EXPORT);
+    showLockIfNeeded(exportButton, locked, QString::fromStdString(planName(FEATURES[FEATURE_CSV_EXPORT].lowestPlan)));
+}
+
+// ---- CSV export (Phase 4C) -------------------------------------------
+
+void TransactionsPage::onExportClicked()
+{
+    // Below Finora Plus, explain the plans instead of asking for a file.
+    // This only saves the person a wasted dialog: ReportExporter checks
+    // the plan again before it reads a single record.
+    PlanId plan = database.currentPlan();
+    if (!planIncludes(plan, FEATURE_CSV_EXPORT)) {
+        if (askToSeePlans(this, "CSV export", QString::fromStdString(lockedFeatureMessage(FEATURE_CSV_EXPORT, plan)))) {
+            emit openPageRequested(PAGE_SUBSCRIPTION);
+        }
+        return;
+    }
+    QString suggested = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
+                        + "/Finora transactions " + QDate::currentDate().toString("yyyy-MM-dd") + ".csv";
+    QString path = QFileDialog::getSaveFileName(this, "Export transactions", suggested, "CSV files (*.csv)");
+    if (!path.isEmpty()) {
+        exportCsvTo(path);
+    }
+}
+
+bool TransactionsPage::exportCsvTo(const QString &path)
+{
+    ReportExporter exporter(database);
+    int rows = 0;
+    if (!exporter.exportTransactionsCsv(path, rows)) {
+        QMessageBox::warning(this, "Finora", "Could not export the transactions.\n\nReason: " + exporter.lastError());
+        return false;
+    }
+    Toast::showMessage(this, "Exported " + countText(rows, "transaction", "transactions") + " to "
+                                 + QFileInfo(path).fileName() + ".");
+    return true;
 }
 
 // ---- Slots ---------------------------------------------------------

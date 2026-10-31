@@ -1,7 +1,9 @@
 // =====================================================================
 //  finora_db_tests.cpp
 //  Automated checks for DatabaseManager and BudgetStore using REAL
-//  SQLite files, including the upgrade from schema version 1 to 2.
+//  SQLite files, including the upgrade from schema version 1 to the
+//  newest version (the upgrade from version 2 to 3 is tested in
+//  finora_billing_tests).
 //
 //  Every database is created inside a new temporary folder that
 //  QTemporaryDir deletes at the end, so the tests never touch the real
@@ -59,10 +61,11 @@ void showMessage(const QString &message)
 
 // ---- Helpers ---------------------------------------------------------
 
-// Every table of schema version 2, in the order tableNames() returns them.
-const QStringList VERSION_2_TABLES = {
+// Every table of the newest schema (version 3), in the order tableNames()
+// returns them. Version 3 added "payments" and "subscriptions".
+const QStringList CURRENT_TABLES = {
     "app_settings", "audit_events", "budgets", "currencies", "login_sessions",
-    "recovery_codes", "transactions", "user_settings", "users"
+    "payments", "recovery_codes", "subscriptions", "transactions", "user_settings", "users"
 };
 
 // A valid transaction that tests copy and then change.
@@ -180,9 +183,9 @@ void testFirstOpen(TestCounter &counter, const QString &folder)
 
     QStringList tables = database.tableNames();
     check(counter, "the database file now exists", QFile::exists(path));
-    check(counter, "schema version is 2", database.schemaVersion() == 2 && CURRENT_SCHEMA_VERSION == 2);
-    check(counter, "tables are exactly the 9 tables of version 2",
-          tables == VERSION_2_TABLES, tables.join(", "));
+    check(counter, "schema version is 3", database.schemaVersion() == 3 && CURRENT_SCHEMA_VERSION == 3);
+    check(counter, "tables are exactly the 11 tables of version 3",
+          tables == CURRENT_TABLES, tables.join(", "));
     check(counter, "PKR, USD and EUR are stored",
           queryNumber("test_first", "SELECT COUNT(*) FROM currencies") == 3);
     check(counter, "foreign keys are switched on",
@@ -202,8 +205,8 @@ void testReopen(TestCounter &counter, const QString &folder)
 
     check(counter, "closing and opening the same file again works", firstOpen && secondOpen,
           database.lastError());
-    check(counter, "schema version is still 2", database.schemaVersion() == 2);
-    check(counter, "still exactly 9 tables", database.tableNames() == VERSION_2_TABLES);
+    check(counter, "schema version is still 3", database.schemaVersion() == 3);
+    check(counter, "still exactly 11 tables", database.tableNames() == CURRENT_TABLES);
     check(counter, "still exactly 3 currencies (no duplicates)",
           queryNumber("test_reopen", "SELECT COUNT(*) FROM currencies") == 3);
     check(counter, "reopening an up-to-date database makes no backup", database.lastBackupPath().isEmpty());
@@ -212,7 +215,7 @@ void testReopen(TestCounter &counter, const QString &folder)
     check(counter, "open() on an already open database is refused", !openedTwice);
     showMessage(database.lastError());
     check(counter, "the open database is still usable afterwards",
-          database.isOpen() && database.schemaVersion() == 2);
+          database.isOpen() && database.schemaVersion() == 3);
 }
 
 void testInsertAndRead(TestCounter &counter, const QString &folder)
@@ -731,8 +734,8 @@ void testStoredSchemaVersion(TestCounter &counter, const QString &folder)
         DatabaseManager database("test_version_check");
         database.open(path);
     }   // closed by the destructor
-    check(counter, "storedSchemaVersion reads a new file as version 2",
-          DatabaseManager::storedSchemaVersion(path) == 2);
+    check(counter, "storedSchemaVersion reads a new file as version 3",
+          DatabaseManager::storedSchemaVersion(path) == 3);
 }
 
 void testUpgradeFromVersion1(TestCounter &counter, const QString &parentFolder)
@@ -760,9 +763,9 @@ void testUpgradeFromVersion1(TestCounter &counter, const QString &parentFolder)
         return;
     }
 
-    check(counter, "after the upgrade the schema version is 2", database.schemaVersion() == 2);
-    check(counter, "the upgraded file has the 9 tables of version 2",
-          database.tableNames() == VERSION_2_TABLES, database.tableNames().join(", "));
+    check(counter, "after the upgrade the schema version is 3", database.schemaVersion() == 3);
+    check(counter, "the upgraded file has the 11 tables of version 3",
+          database.tableNames() == CURRENT_TABLES, database.tableNames().join(", "));
 
     std::vector<Transaction> rows;
     database.loadTransactions(rows);
