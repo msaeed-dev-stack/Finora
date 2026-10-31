@@ -13,6 +13,8 @@
 #include "core/AccountRules.h"
 #include "core/Budget.h"
 #include "core/CsvExport.h"
+#include "core/ExchangeRates.h"
+#include "core/Goal.h"
 #include "core/Greeting.h"
 #include "core/Money.h"
 #include "core/PasswordPolicy.h"
@@ -768,7 +770,8 @@ void testPlansAndEntitlements(TestCounter &counter)
     }
     checkBool(counter, "every Free feature is built and available", freeAllBuilt, true);
     checkBool(counter, "unlimited budgets are available on Plus", featureAvailable(FEATURE_UNLIMITED_BUDGETS), true);
-    checkBool(counter, "savings goals are marked as planned, not available", featureAvailable(FEATURE_SAVINGS_GOALS), false);
+    checkBool(counter, "recurring transactions are marked as planned, not available", featureAvailable(FEATURE_RECURRING),
+              false);
     checkBool(counter, "team members, shared workspaces, roles and team reports need Finora Online",
               FEATURES[FEATURE_TEAM_MEMBERS].state == FEATURE_NEEDS_ONLINE
                   && FEATURES[FEATURE_SHARED_WORKSPACES].state == FEATURE_NEEDS_ONLINE
@@ -779,8 +782,8 @@ void testPlansAndEntitlements(TestCounter &counter)
               lockedFeatureMessage(FEATURE_UNLIMITED_BUDGETS, PLAN_FREE),
               "\"Unlimited active budgets\" is part of Finora Plus. Your plan: Finora Free.");
     checkText(counter, "the message for a planned feature",
-              lockedFeatureMessage(FEATURE_SAVINGS_GOALS, PLAN_PLUS),
-              "\"Savings goals\" is planned and not available in this version of Finora yet.");
+              lockedFeatureMessage(FEATURE_RECURRING, PLAN_PLUS),
+              "\"Recurring transactions\" is planned and not available in this version of Finora yet.");
     checkText(counter, "the message for a team feature",
               lockedFeatureMessage(FEATURE_TEAM_MEMBERS, PLAN_BUSINESS),
               "\"Team members\" will need Finora Online, which is planned. "
@@ -1001,6 +1004,162 @@ void testCsvExport(TestCounter &counter)
               "Date,Type,Category,Description,Currency,Amount\r\n");
 }
 
+// ---- Milestone 5: savings goals and exchange rates ----
+
+void testGoals(TestCounter &counter)
+{
+    Goal laptop;
+    laptop.name = "New laptop";
+    laptop.currencyCode = "PKR";
+    laptop.targetMinor = 25000000;   // 250,000.00
+    laptop.targetDate = "2027-03-31";
+    checkText(counter, "a complete goal is valid", validateGoal(laptop), "");
+    Goal check = laptop;
+    check.name = "   ";
+    checkText(counter, "a goal needs a name", validateGoal(check), "Please give the goal a name.");
+    check = laptop;
+    check.name = std::string(41, 'a');
+    checkText(counter, "a goal name has at most 40 characters", validateGoal(check),
+              "The name can have at most 40 characters.");
+    check = laptop;
+    check.currencyCode = "GBP";
+    checkText(counter, "a goal needs PKR, USD or EUR", validateGoal(check), "Please choose PKR, USD or EUR.");
+    check = laptop;
+    check.targetMinor = 0;
+    checkText(counter, "a target of zero is refused", validateGoal(check), "The target must be more than zero.");
+    check = laptop;
+    check.targetDate = "2027-02-30";
+    checkText(counter, "an impossible target date is refused", validateGoal(check),
+              "The target date is not a valid date.");
+    check = laptop;
+    check.targetDate = "";
+    checkText(counter, "a goal without a target date is valid", validateGoal(check), "");
+
+    GoalContribution putIn;
+    putIn.amountMinor = 500000;
+    putIn.date = "2026-10-31";
+    checkText(counter, "putting money in is valid", validateContribution(putIn, 0), "");
+    GoalContribution takeOut = putIn;
+    takeOut.amountMinor = -200000;
+    checkText(counter, "taking out less than is saved is valid", validateContribution(takeOut, 500000), "");
+    checkText(counter, "taking out more than is saved is refused", validateContribution(takeOut, 100000),
+              "You can take out at most what is saved.");
+    GoalContribution wrong = putIn;
+    wrong.amountMinor = 0;
+    checkText(counter, "an amount of zero is refused", validateContribution(wrong, 0),
+              "The amount must be more than zero.");
+    wrong = putIn;
+    wrong.amountMinor = MAX_AMOUNT_MINOR;
+    checkText(counter, "a saved amount that would become too large is refused (checked addition)",
+              validateContribution(wrong, MAX_AMOUNT_MINOR), "The saved amount would become too large.");
+    wrong = putIn;
+    wrong.date = "2026-13-01";
+    checkText(counter, "a contribution needs a valid date", validateContribution(wrong, 0), "Please choose a valid date.");
+
+    checkInt(counter, "31 Oct 2026 to 31 Mar 2027 is 6 months, counting October", monthsUntil("2026-10-31", "2027-03-31"), 6);
+    checkInt(counter, "a target in the current month gives 1 month", monthsUntil("2026-10-05", "2026-10-31"), 1);
+    checkInt(counter, "across a new year: December to January is 2 months", monthsUntil("2026-12-15", "2027-01-10"), 2);
+
+    Goal half = laptop;
+    half.savedMinor = 12500000;
+    GoalProgress progress = goalProgressFor(half, "2026-10-31");
+    checkInt(counter, "half of the target saved is 50%", progress.percent, 50);
+    checkAmount(counter, "125,000.00 is still missing", progress.remainingMinor, 12500000);
+    checkInt(counter, "6 months to go", progress.monthsLeft, 6);
+    checkAmount(counter, "save 20,833.34 a month: 20,833.333... rounded UP", progress.monthlyNeededMinor, 2083334);
+
+    Goal done = laptop;
+    done.savedMinor = 26000000;
+    GoalProgress reached = goalProgressFor(done, "2026-10-31");
+    checkBool(counter, "saving more than the target reaches it: 100%, nothing missing, nothing per month",
+              reached.reached && reached.percent == 100 && reached.remainingMinor == 0 && reached.monthlyNeededMinor == 0,
+              true);
+    GoalProgress late = goalProgressFor(half, "2027-04-01");
+    checkBool(counter, "after the target date, an unreached goal is overdue",
+              late.overdue && late.monthsLeft == -1 && late.monthlyNeededMinor == 0, true);
+    Goal open = half;
+    open.targetDate = "";
+    GoalProgress noDate = goalProgressFor(open, "2026-10-31");
+    checkBool(counter, "without a target date, no monthly amount is suggested",
+              noDate.monthsLeft == -1 && noDate.monthlyNeededMinor == 0 && !noDate.overdue, true);
+}
+
+void testExchangeRates(TestCounter &counter)
+{
+    long long rate = 0;
+    checkText(counter, "\"278.5\" is a valid rate", parseRate("278.5", rate), "");
+    checkAmount(counter, "278.5 is stored as 2785000: 4 decimal places, never a double", rate, 2785000);
+    checkText(counter, "a rate is shown with 4 decimal places", formatRate(2785000), "278.5000");
+    checkText(counter, "a small rate keeps its leading zeros", formatRate(50), "0.0050");
+    checkText(counter, "5 decimal places are refused", parseRate("1.23456", rate),
+              "A rate can have at most 4 decimal places.");
+    checkText(counter, "a rate of zero is refused", parseRate("0", rate), "The rate must be more than zero.");
+    checkText(counter, "letters and minus signs are refused", parseRate("-5", rate),
+              "A rate can contain only digits and one decimal point, for example 278.5.");
+    checkText(counter, "an empty rate is refused", parseRate("  ", rate), "Please enter a rate.");
+    checkText(counter, "a huge rate is refused", parseRate("99999999", rate), "The rate is too large.");
+
+    ExchangeRates rates;
+    rates.usdInPkr = 2785000;   // 1 USD = 278.5000 PKR
+    rates.eurInPkr = 3012000;   // 1 EUR = 301.2000 PKR
+    long long result = 0;
+    checkBool(counter, "USD 100.00 at 278.5 is PKR 27,850.00",
+              convertAmount(10000, "USD", "PKR", rates, result) && result == 2785000, true);
+    checkBool(counter, "and PKR 27,850.00 is USD 100.00 again",
+              convertAmount(2785000, "PKR", "USD", rates, result) && result == 10000, true);
+    checkBool(counter, "EUR 10.00 is USD 10.82: through PKR, rounded once",
+              convertAmount(1000, "EUR", "USD", rates, result) && result == 1082, true);
+    checkBool(counter, "PKR to PKR needs no rate", convertAmount(12345, "PKR", "PKR", ExchangeRates(), result)
+                                                      && result == 12345, true);
+
+    ExchangeRates two;
+    two.usdInPkr = 20000;   // 1 USD = 2 PKR, so 1 paisa is exactly half a cent
+    checkBool(counter, "an exact half is rounded away from zero: half a cent becomes 1 cent",
+              convertAmount(1, "PKR", "USD", two, result) && result == 1, true);
+    checkBool(counter, "and minus half a cent becomes minus 1 cent",
+              convertAmount(-1, "PKR", "USD", two, result) && result == -1, true);
+    checkBool(counter, "without a EUR rate, EUR cannot be converted", convertAmount(100, "EUR", "PKR", two, result),
+              false);
+
+    ExchangeRates extreme;
+    extreme.eurInPkr = MAX_RATE;
+    checkBool(counter, "a result too large for a long long is refused, never wrapped around (checked multiplication)",
+              convertAmount(MAX_AMOUNT_MINOR, "EUR", "PKR", extreme, result), false);
+
+    // Direction: "1 USD = 278.5 PKR" multiplies when going to PKR and divides when
+    // leaving PKR. Every pair of currencies, both ways, with exact expected values
+    // (worked out separately with quotient and remainder).
+    checkBool(counter, "direction USD -> PKR: USD 1.00 is PKR 278.50",
+              convertAmount(100, "USD", "PKR", rates, result) && result == 27850, true);
+    checkBool(counter, "direction PKR -> USD: PKR 278.50 is USD 1.00",
+              convertAmount(27850, "PKR", "USD", rates, result) && result == 100, true);
+    checkBool(counter, "direction EUR -> PKR: EUR 1.00 is PKR 301.20",
+              convertAmount(100, "EUR", "PKR", rates, result) && result == 30120, true);
+    checkBool(counter, "direction PKR -> EUR: PKR 1,000.00 is EUR 3.32 (3.3200...)",
+              convertAmount(100000, "PKR", "EUR", rates, result) && result == 332, true);
+    checkBool(counter, "direction USD -> EUR: USD 10.00 is EUR 9.25 (9.2463...)",
+              convertAmount(1000, "USD", "EUR", rates, result) && result == 925, true);
+    checkBool(counter, "direction PKR -> USD: PKR 1,000.00 is USD 3.59 (3.5906...)",
+              convertAmount(100000, "PKR", "USD", rates, result) && result == 359, true);
+    checkBool(counter, "a negative amount keeps its sign: USD -10.00 is PKR -2,785.00",
+              convertAmount(-1000, "USD", "PKR", rates, result) && result == -278500, true);
+    checkBool(counter, "just below half a cent rounds down: PKR 1.39 is USD 0.00 (0.499 cent)",
+              convertAmount(139, "PKR", "USD", rates, result) && result == 0, true);
+    checkBool(counter, "just above half a cent rounds up: PKR 1.40 is USD 0.01 (0.503 cent)",
+              convertAmount(140, "PKR", "USD", rates, result) && result == 1, true);
+    checkBool(counter, "and the same below zero: PKR -1.40 is USD -0.01",
+              convertAmount(-140, "PKR", "USD", rates, result) && result == -1, true);
+
+    long long total = 500;
+    checkBool(counter, "a negative balance can be added: 500 + (-800) = -300",
+              addSignedChecked(total, -800) && total == -300, true);
+    total = LLONG_MAX - 1;
+    checkBool(counter, "an addition past the largest long long is refused", addSignedChecked(total, 2), false);
+    checkAmount(counter, "and the total is left unchanged", total, LLONG_MAX - 1);
+    total = LLONG_MIN + 1;
+    checkBool(counter, "an addition below the smallest long long is refused", addSignedChecked(total, -2), false);
+}
+
 int main()
 {
     TestCounter counter;
@@ -1036,6 +1195,10 @@ int main()
     testPlanChanges(counter);
     testPausedBudgets(counter);
     testCsvExport(counter);
+
+    std::cout << "---- Milestone 5: savings goals and exchange rates ----\n";
+    testGoals(counter);
+    testExchangeRates(counter);
 
     std::cout << "-----------------\n";
     std::cout << counter.checksRun << " checks, " << counter.checksFailed << " failed\n";

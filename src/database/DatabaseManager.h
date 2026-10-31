@@ -15,6 +15,7 @@
 
 #include <vector>
 
+#include "core/ExchangeRates.h"
 #include "core/Plans.h"
 #include "core/Session.h"
 #include "core/Transaction.h"
@@ -24,7 +25,8 @@
 //   2  Milestone 4: budgets, settings, the account tables used from
 //      Phase 4B, and an owner, a unique id and timestamps for every transaction
 //   3  Milestone 4, Phase 4C: subscriptions and the billing history (payments)
-const int CURRENT_SCHEMA_VERSION = 3;
+//   4  Milestone 5: savings goals and the money put into them
+const int CURRENT_SCHEMA_VERSION = 4;
 
 // One line of an account's audit history (Phase 4C: shown on Finora Business).
 struct AuditEvent {
@@ -65,9 +67,10 @@ public:
     static int storedSchemaVersion(const QString &databasePath);
 
     // Opens the database file, creating the file and its tables if needed.
-    // An older file is upgraded: first a backup copy is saved and checked,
-    // then every change runs inside one database transaction. If any step
-    // fails, the transaction is rolled back and the file stays as it was.
+    // An older file is upgraded if that is allowed (setUpgradeAllowed):
+    // first a backup copy is saved and checked, then every change runs
+    // inside one database transaction. If any step fails, the transaction
+    // is rolled back and the file stays as it was.
     // Finora passes defaultDatabasePath(); the tests pass a temporary file.
     // Returns false and sets lastError() if anything goes wrong.
     bool open(const QString &databasePath);
@@ -80,6 +83,21 @@ public:
     // The backup made by the last upgrade, or empty if open() did not
     // need to upgrade anything.
     QString lastBackupPath() const;
+
+    // ---- Asking before an upgrade (Milestone 5) ----
+
+    // Whether open() may upgrade a file from an older Finora that already
+    // holds records. Finora allows it only after the person has chosen
+    // "Upgrade and continue" (see openDatabaseAtStartup in
+    // src/ui/DatabaseStartup.h). It is allowed unless this is called, so
+    // the tests can upgrade the files they prepare. A new, empty file is
+    // always created.
+    void setUpgradeAllowed(bool allowed);
+
+    // True when the last open() stopped because the file must be upgraded
+    // first and that was not allowed. The file's saved records were not
+    // changed, and no backup was made.
+    bool upgradeNeeded() const;
 
     // The name of the open connection inside Qt SQL. The other store
     // classes of finora_database use it to run their own SQL.
@@ -169,6 +187,17 @@ public:
     // Saves `value` under `key`, replacing an older value.
     bool saveSetting(const QString &key, const QString &value);
 
+    // ---- Exchange rates (Milestone 5) ----
+    // The person's own rates, kept with the other settings. A saved value
+    // that is not a valid rate (for example, edited by hand) counts as
+    // "not entered", so it can never be used for a conversion.
+    ExchangeRates exchangeRates();
+    // Saves both rates and today's date. Each rate must be 0 (not entered)
+    // or a valid rate from parseRate(); anything else is refused.
+    bool saveExchangeRates(const ExchangeRates &rates);
+    // The day the rates were last saved ("2026-10-31"), or "" if never.
+    QString exchangeRatesSavedOn();
+
     // ---- History of important events ----
 
     // Adds one line to the audit_events table, for example
@@ -191,6 +220,7 @@ private:
                       long long expectedAccounts);
     bool upgradeToVersion2();
     bool upgradeToVersion3();
+    bool upgradeToVersion4();
     bool checkForeignKeys();
     bool readNumber(const QString &sql, long long &number);
     bool runStatement(const QString &sql);
@@ -201,6 +231,8 @@ private:
     QString backupPath;       // the copy saved by the last upgrade, or empty
     QString errorMessage;     // explains the most recent failure
     bool opened = false;      // true only while this object owns an open connection
+    bool upgradeAllowed = true;   // see setUpgradeAllowed()
+    bool needsUpgrade = false;    // see upgradeNeeded()
     const Session *attachedSession = nullptr;   // whose records; nullptr = records without an owner
 };
 

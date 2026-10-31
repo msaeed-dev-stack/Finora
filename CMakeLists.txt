@@ -11,7 +11,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(Finora
-    VERSION 0.4.0
+    VERSION 0.5.0
     DESCRIPTION "Desktop personal finance and budget management system"
     LANGUAGES CXX)
 
@@ -53,6 +53,8 @@ add_library(finora_core STATIC
     src/core/Plans.h          src/core/Plans.cpp
     src/core/Subscription.h   src/core/Subscription.cpp
     src/core/CsvExport.h      src/core/CsvExport.cpp
+    src/core/Goal.h           src/core/Goal.cpp
+    src/core/ExchangeRates.h  src/core/ExchangeRates.cpp
 )
 target_include_directories(finora_core PUBLIC src)
 target_compile_options(finora_core PRIVATE ${FINORA_WARNINGS})
@@ -63,7 +65,7 @@ target_compile_options(finora_core PRIVATE ${FINORA_WARNINGS})
 #     the database at a time.
 #     Qt SQL is linked PRIVATE: code that uses this library does not
 #     see any SQL classes, only DatabaseManager, BudgetStore, UserStore,
-#     SubscriptionStore and InstanceLock.
+#     SubscriptionStore, GoalStore and InstanceLock.
 # =====================================================================
 add_library(finora_database STATIC
     src/database/DatabaseManager.h
@@ -76,6 +78,8 @@ add_library(finora_database STATIC
     src/database/UserStore.cpp
     src/database/SubscriptionStore.h
     src/database/SubscriptionStore.cpp
+    src/database/GoalStore.h
+    src/database/GoalStore.cpp
 )
 target_include_directories(finora_database PUBLIC src)
 target_link_libraries(finora_database
@@ -178,6 +182,10 @@ set(FINORA_UI_SOURCES
     src/ui/SubscriptionPage.h src/ui/SubscriptionPage.cpp
     src/ui/CheckoutDialog.h   src/ui/CheckoutDialog.cpp
     src/ui/AuditHistoryDialog.h  src/ui/AuditHistoryDialog.cpp
+    src/ui/GoalsPage.h        src/ui/GoalsPage.cpp
+    src/ui/GoalDialogs.h      src/ui/GoalDialogs.cpp
+    src/ui/CurrencyPage.h     src/ui/CurrencyPage.cpp
+    src/ui/DatabaseStartup.h  src/ui/DatabaseStartup.cpp
 )
 
 # Icons, fonts (with their licences) and the style sheet. They are built
@@ -283,8 +291,9 @@ qt_add_resources(finora_ui_tests "finora_ui_test_licences"
     FILES third_party/libsodium-1.0.22/LICENSE
 )
 target_include_directories(finora_ui_tests PRIVATE src)
+# Qt SQL lets the start-up test prepare an older data file and interrupt an upgrade.
 target_link_libraries(finora_ui_tests PRIVATE finora_core finora_database finora_auth finora_billing
-                                              finora_reports Qt6::Widgets Qt6::Svg)
+                                              finora_reports Qt6::Widgets Qt6::Svg Qt6::Sql)
 target_compile_options(finora_ui_tests PRIVATE ${FINORA_WARNINGS})
 target_compile_definitions(finora_ui_tests PRIVATE FINORA_VERSION="${PROJECT_VERSION}")
 finora_copy_sodium_dll(finora_ui_tests)

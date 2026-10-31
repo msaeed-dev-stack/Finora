@@ -2,8 +2,8 @@
 //  finora_db_tests.cpp
 //  Automated checks for DatabaseManager and BudgetStore using REAL
 //  SQLite files, including the upgrade from schema version 1 to the
-//  newest version (the upgrade from version 2 to 3 is tested in
-//  finora_billing_tests).
+//  newest version (the upgrades from version 2 to 3 and from 3 to 4
+//  are tested in finora_billing_tests, because they need accounts).
 //
 //  Every database is created inside a new temporary folder that
 //  QTemporaryDir deletes at the end, so the tests never touch the real
@@ -22,6 +22,7 @@
 #include <iostream>
 #include <string>
 
+#include "InterruptedUpgrade.h"
 #include "core/Budget.h"
 #include "core/Transaction.h"
 #include "database/BudgetStore.h"
@@ -61,11 +62,12 @@ void showMessage(const QString &message)
 
 // ---- Helpers ---------------------------------------------------------
 
-// Every table of the newest schema (version 3), in the order tableNames()
-// returns them. Version 3 added "payments" and "subscriptions".
+// Every table of the newest schema (version 4), in the order tableNames()
+// returns them. Version 3 added "payments" and "subscriptions", version 4
+// "goal_contributions" and "goals".
 const QStringList CURRENT_TABLES = {
-    "app_settings", "audit_events", "budgets", "currencies", "login_sessions",
-    "payments", "recovery_codes", "subscriptions", "transactions", "user_settings", "users"
+    "app_settings", "audit_events", "budgets", "currencies", "goal_contributions", "goals",
+    "login_sessions", "payments", "recovery_codes", "subscriptions", "transactions", "user_settings", "users"
 };
 
 // A valid transaction that tests copy and then change.
@@ -183,8 +185,8 @@ void testFirstOpen(TestCounter &counter, const QString &folder)
 
     QStringList tables = database.tableNames();
     check(counter, "the database file now exists", QFile::exists(path));
-    check(counter, "schema version is 3", database.schemaVersion() == 3 && CURRENT_SCHEMA_VERSION == 3);
-    check(counter, "tables are exactly the 11 tables of version 3",
+    check(counter, "schema version is 4", database.schemaVersion() == 4 && CURRENT_SCHEMA_VERSION == 4);
+    check(counter, "tables are exactly the 13 tables of version 4",
           tables == CURRENT_TABLES, tables.join(", "));
     check(counter, "PKR, USD and EUR are stored",
           queryNumber("test_first", "SELECT COUNT(*) FROM currencies") == 3);
@@ -205,8 +207,8 @@ void testReopen(TestCounter &counter, const QString &folder)
 
     check(counter, "closing and opening the same file again works", firstOpen && secondOpen,
           database.lastError());
-    check(counter, "schema version is still 3", database.schemaVersion() == 3);
-    check(counter, "still exactly 11 tables", database.tableNames() == CURRENT_TABLES);
+    check(counter, "schema version is still 4", database.schemaVersion() == 4);
+    check(counter, "still exactly 13 tables", database.tableNames() == CURRENT_TABLES);
     check(counter, "still exactly 3 currencies (no duplicates)",
           queryNumber("test_reopen", "SELECT COUNT(*) FROM currencies") == 3);
     check(counter, "reopening an up-to-date database makes no backup", database.lastBackupPath().isEmpty());
@@ -215,7 +217,7 @@ void testReopen(TestCounter &counter, const QString &folder)
     check(counter, "open() on an already open database is refused", !openedTwice);
     showMessage(database.lastError());
     check(counter, "the open database is still usable afterwards",
-          database.isOpen() && database.schemaVersion() == 3);
+          database.isOpen() && database.schemaVersion() == 4);
 }
 
 void testInsertAndRead(TestCounter &counter, const QString &folder)
@@ -734,8 +736,8 @@ void testStoredSchemaVersion(TestCounter &counter, const QString &folder)
         DatabaseManager database("test_version_check");
         database.open(path);
     }   // closed by the destructor
-    check(counter, "storedSchemaVersion reads a new file as version 3",
-          DatabaseManager::storedSchemaVersion(path) == 3);
+    check(counter, "storedSchemaVersion reads a new file as version 4",
+          DatabaseManager::storedSchemaVersion(path) == 4);
 }
 
 void testUpgradeFromVersion1(TestCounter &counter, const QString &parentFolder)
@@ -763,8 +765,8 @@ void testUpgradeFromVersion1(TestCounter &counter, const QString &parentFolder)
         return;
     }
 
-    check(counter, "after the upgrade the schema version is 3", database.schemaVersion() == 3);
-    check(counter, "the upgraded file has the 11 tables of version 3",
+    check(counter, "after the upgrade the schema version is 4", database.schemaVersion() == 4);
+    check(counter, "the upgraded file has the 13 tables of version 4",
           database.tableNames() == CURRENT_TABLES, database.tableNames().join(", "));
 
     std::vector<Transaction> rows;
@@ -1043,9 +1045,127 @@ void testTransactionTimestamps(TestCounter &counter, const QString &folder)
                                       " AND created_at = '2000-01-01T00:00:00Z'") == 1);
 }
 
+// =====================================================================
+//  Milestone 5: an upgrade needs the person's agreement, also after a
+//  crash in the middle of an earlier upgrade
+// =====================================================================
+
+// Every transaction of a file as text, one line each, read through a
+// read-only connection of its own. Only the columns of every layout.
+QString transactionsInFile(const QString &path)
+{
+    QString text;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", "file_rows");
+        db.setDatabaseName(path);
+        db.setConnectOptions("QSQLITE_OPEN_READONLY");
+        if (db.open()) {
+            QSqlQuery query(db);
+            query.exec("SELECT id, type, amount_minor, currency_code, category, description, transaction_date "
+                       "FROM transactions ORDER BY id");
+            while (query.next()) {
+                for (int i = 0; i < 7; i++) {
+                    text += query.value(i).toString() + "|";
+                }
+                text += "\n";
+            }
+        }   // `query` is destroyed here
+        db.close();
+    }
+    QSqlDatabase::removeDatabase("file_rows");
+    return text;
+}
+
+void testUpgradeNeedsAgreement(TestCounter &counter, const QString &parentFolder)
+{
+    QString folder = parentFolder + "/needs_agreement";
+    QDir().mkpath(folder);
+    QString path = folder + "/finora.db";
+    createVersion1File(path);
+    QByteArray bytesBefore = readFile(path);
+    {
+        DatabaseManager database("test_not_agreed");
+        database.setUpgradeAllowed(false);
+        bool opened = database.open(path);
+        check(counter, "without the person's agreement, open() refuses to upgrade an older file",
+              !opened && database.upgradeNeeded() && !database.isOpen());
+        showMessage(database.lastError());
+    }
+    check(counter, "the file is byte-for-byte unchanged and no backup was made",
+          readFile(path) == bytesBefore && !QFileInfo::exists(folder + "/backups"));
+
+    // There is nothing to upgrade in a new file or in an up-to-date one.
+    QString newPath = folder + "/new.db";
+    {
+        DatabaseManager database("test_new_not_agreed");
+        database.setUpgradeAllowed(false);
+        check(counter, "a new, empty file is still created without any question",
+              database.open(newPath) && database.schemaVersion() == CURRENT_SCHEMA_VERSION
+                  && !database.upgradeNeeded(),
+              database.lastError());
+    }
+    {
+        DatabaseManager database("test_current_not_agreed");
+        database.setUpgradeAllowed(false);
+        check(counter, "an up-to-date file opens without any question",
+              database.open(newPath) && !database.upgradeNeeded(), database.lastError());
+    }
+}
+
+// Regression test: a crash in the middle of an upgrade. The next start
+// must not finish or repeat the upgrade before the person agrees again.
+void testInterruptedUpgrade(TestCounter &counter, const QString &parentFolder)
+{
+    QString folder = parentFolder + "/interrupted_upgrade";
+    QDir().mkpath(folder);
+    QString path = folder + "/finora.db";
+    bool prepared = createVersion1File(path);
+    QString recordsBefore = transactionsInFile(path);
+    check(counter, "a layout 1 file with 3 transactions is prepared", prepared && recordsBefore.count("\n") == 3);
+
+    check(counter, "a second copy of this program is killed in the middle of an upgrade, leaving SQLite's journal",
+          interruptUpgradeOf(path));
+    check(counter, "the read-only layout check cannot read the file in this state, and changes nothing",
+          DatabaseManager::storedSchemaVersion(path) == -1 && QFile::exists(path + "-journal"));
+
+    // The next start, before the person has answered the question.
+    {
+        DatabaseManager database("test_interrupted_not_agreed");
+        database.setUpgradeAllowed(false);
+        bool opened = database.open(path);
+        check(counter, "without agreement, open() refuses to finish or redo the upgrade",
+              !opened && database.upgradeNeeded() && database.lastBackupPath().isEmpty());
+        showMessage(database.lastError());
+    }
+    check(counter, "SQLite has undone the interrupted change: the journal is gone", !QFile::exists(path + "-journal"));
+    check(counter, "the file is back at its last saved state: layout 1, the same 3 transactions, no new table",
+          DatabaseManager::storedSchemaVersion(path) == 1 && transactionsInFile(path) == recordsBefore
+              && numberFromFile(path, "SELECT COUNT(*) FROM sqlite_master "
+                                      "WHERE name IN ('goals', 'interrupted_filler')") == 0);
+    check(counter, "no backup was made, because nothing was upgraded", !QFileInfo::exists(folder + "/backups"));
+
+    // After "Upgrade and continue".
+    {
+        DatabaseManager database("test_interrupted_agreed");
+        database.setUpgradeAllowed(true);
+        bool opened = database.open(path);
+        QString backup = database.lastBackupPath();
+        check(counter, "once the person agrees, the upgrade runs, with a verified backup of layout 1",
+              opened && database.schemaVersion() == CURRENT_SCHEMA_VERSION && !backup.isEmpty()
+                  && DatabaseManager::storedSchemaVersion(backup) == 1,
+              database.lastError());
+    }
+    check(counter, "and every transaction is still the same", transactionsInFile(path) == recordsBefore);
+}
+
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
+    // testInterruptedUpgrade starts a second copy of this program, which
+    // stops in the middle of an upgrade (see InterruptedUpgrade.h).
+    if (argc == 3 && std::string(argv[1]) == "--interrupt-upgrade") {
+        return runInterruptedUpgrade(QString::fromLocal8Bit(argv[2]));
+    }
     app.setApplicationName("Finora");   // so defaultDatabasePath() matches the real program
 
     TestCounter counter;
@@ -1084,6 +1204,10 @@ int main(int argc, char *argv[])
     testSettings(counter, folder);
     testBudgetStore(counter, folder);
     testTransactionTimestamps(counter, folder);
+
+    std::cout << "---- Milestone 5: an upgrade needs the person's agreement ----\n";
+    testUpgradeNeedsAgreement(counter, folder);
+    testInterruptedUpgrade(counter, folder);
 
     std::cout << "---------------------\n";
     std::cout << counter.checksRun << " checks, " << counter.checksFailed << " failed\n";

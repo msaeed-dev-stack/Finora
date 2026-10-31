@@ -4,12 +4,13 @@
 
 Finora is a desktop personal finance and budget management application for Windows. It is written in C++17 with Qt 6 Widgets and SQLite, and is being built as a Programming Fundamentals semester project.
 
-> **Current status: Milestone 4 complete (Phases 4A, 4B and 4C).**
+> **Current status: Milestone 5 complete (savings goals and exchange rates), after Milestone 4 (Phases 4A, 4B and 4C).**
 > - **From Milestone 3:** the Transactions page.
 > - **Phase 4A:** a **dashboard**, **monthly budgets**, a **light and a dark theme**, and a **safe database upgrade** to schema version 2.
 > - **Phase 4B:** local **accounts** with Argon2id-protected passwords, recovery codes, sessions, and **one person's data per account**.
 > - **Phase 4C:** four **subscription plans** (Free, Plus, Pro, Business) with plan rules checked below every screen, a **simulated checkout** (no card details, no real money), a billing history, CSV export, a monthly PDF summary and an audit history.
-> - **Not built yet:** savings goals, exchange rates, the Reports page and Business team features. Pages and features that are not built yet say so ("Soon").
+> - **Milestone 5:** **savings goals** (Finora Plus) with safe contributions and progress, and **exchange rates that you enter** for PKR, USD and EUR, with a converter and an estimate of all balances in one currency. Schema version 4.
+> - **Not built yet:** the Reports page and Business team features. Pages and features that are not built yet say so ("Soon").
 
 ## Student details
 
@@ -73,7 +74,9 @@ Finora is an offline desktop program that records income and expenses, compares 
 | Simulated checkout (no card fields, no real money), upgrades, a smaller plan at the renewal date, cancel and resume, renewal with 7 days of grace, a 14-day Pro trial | Done in Phase 4C |
 | CSV export of transactions (Plus), a monthly PDF summary (Pro), the account's audit history (Business) | Done in Phase 4C |
 | Business team members, shared workspaces and roles | Planned: needs Finora Online (a server) |
-| Savings goals; PKR, USD and EUR with manual exchange rates | Planned: Milestone 5 |
+| Savings goals (Finora Plus): a target, an optional date, money put in and taken out, progress, the amount to save each month, a complete history; kept and shown after a downgrade | Done in Milestone 5 |
+| Schema version 4 (goal tables and a trigger that keeps every saved amount between zero and the largest amount) with a verified backup before the upgrade | Done in Milestone 5 |
+| Currency page: exchange rates that you enter (4 decimal places), a converter, and an estimate of all balances in one currency; records are never converted | Done in Milestone 5 |
 | Reports page (monthly and yearly reports) | Planned: Milestone 6 |
 | Final testing, documentation and Windows package | Planned: Milestone 7 |
 
@@ -127,7 +130,7 @@ C:\Users\<your user name>\AppData\Local\Finora\finora.db
 To open that folder, press **Win + R**, type `%LOCALAPPDATA%\Finora` and press Enter.
 
 - **First start:** Finora creates the folder, the file and its tables automatically.
-- **Upgrading from Milestone 2 or 3:** a file with schema version 1 is upgraded to version 2 only after you click **Upgrade and continue**. Finora first saves a complete copy in `%LOCALAPPDATA%\Finora\backups\` (for example `finora-v1-backup-2026-10-30_15-04-59.db`) and checks it. If any step of the upgrade fails, every change is rolled back and the file stays exactly as it was. **Quit without changes** closes Finora and changes nothing.
+- **Upgrading from an older Finora:** an older file (schema version 1, 2 or 3) is upgraded to version 4 only after you click **Upgrade and continue**. If the computer loses power in the middle of an upgrade, nothing is lost: at the next start SQLite restores the file to its last saved state, and Finora asks again. Finora first saves a complete copy in `%LOCALAPPDATA%\Finora\backups\` (for example `finora-v1-backup-2026-10-30_15-04-59.db`) and checks it. If any step of the upgrade fails, every change is rolled back and the file stays exactly as it was. **Quit without changes** closes Finora and changes nothing.
 - **Back up:** close Finora, then copy `finora.db` to a safe place such as a USB drive.
 - **Restore:** close Finora, then copy your backup over `finora.db`.
 - **Start with an empty database:** close Finora and delete `finora.db`. A new, empty one is created at the next start. This permanently deletes all records.
@@ -167,12 +170,13 @@ Finora starts with a sign-in window. Each person who uses Finora on the computer
 
 ## Automated tests
 
-| Test program | What it checks | Last result, 30 Oct 2026, Windows |
+| Test program | What it checks | Last result, 31 Oct 2026, Windows |
 |---|---|---|
-| `finora_tests` | Greeting, leap years, days per month, real calendar dates, currencies, transaction validation, reading and formatting amounts, search and filters; checked addition, months, totals per currency, money flow, spending per category, chart scale, every edge of the budget rules; the password policy and strength meter, email and name rules, recovery code format, sign-in delays | 241 of 241 checks pass |
-| `finora_ui_tests` | The real main window and sidebar; the Transactions page on a real database; the form's validation; the dashboard's wallet cards, chart (including the arrow keys) and alerts; budgets created, refused, edited and deleted through the real forms; theme switching, reduce motion, and the saved theme after a restart; the sign-in window: sign-up, recovery codes, moving older records, sign-out, a wrong password, recovery, a second account, automatic sign-out | 164 of 164 checks pass |
+| `finora_tests` | Greeting, leap years, days per month, real calendar dates, currencies, transaction validation, reading and formatting amounts, search and filters; checked addition, months, totals per currency, money flow, spending per category, chart scale, every edge of the budget rules; the password policy and strength meter, email and name rules, recovery code format, sign-in delays; plans, subscriptions and CSV text; savings goal rules and progress; exchange rates, conversion in every direction and rounding | 392 of 392 checks pass |
+| `finora_ui_tests` | The real main window and sidebar; the Transactions page on a real database; the form's validation; the dashboard's wallet cards, chart (including the arrow keys) and alerts; budgets created, refused, edited and deleted through the real forms; theme switching, reduce motion, and the saved theme after a restart; the sign-in window: sign-up, recovery codes, moving older records, sign-out, a wrong password, recovery, a second account, automatic sign-out; the Subscription page, the checkout and the locked features; the Goals and Currency pages, including a dashboard balance that goal money does not change; the start-up question after an interrupted upgrade | 256 of 256 checks pass |
 | `finora_auth_tests` | Argon2id with libsodium, including its measured 256 MiB memory use and a deliberate out-of-memory failure; sign-up with no password anywhere in the database file; general error messages and waiting times; sessions; profile and password changes; single-use recovery codes; one person's data per account; moving older records | 106 of 106 checks pass |
-| `finora_db_tests` | Real SQLite files: creating and reopening, saving, reading, updating, deleting, punctuation and Urdu text, invalid data, error messages, open failures, data kept after closing, SQLite's own rules, ids never reused, only one running copy; the upgrade from version 1 with its checked backup, two deliberate upgrade failures that leave the file byte-for-byte unchanged, settings, budgets, timestamps | 157 of 157 checks pass |
+| `finora_db_tests` | Real SQLite files: creating and reopening, saving, reading, updating, deleting, punctuation and Urdu text, invalid data, error messages, open failures, data kept after closing, SQLite's own rules, ids never reused, only one running copy; the upgrade from version 1 with its checked backup, two deliberate upgrade failures that leave the file byte-for-byte unchanged, settings, budgets, timestamps; no upgrade without the person's agreement, also after a real interruption in the middle of an upgrade | 170 of 170 checks pass |
+| `finora_billing_tests` | The upgrades from versions 2 and 3 on real files with accounts (every older row unchanged, a verified backup, a rollback on failure); the database's own rules; plans and entitlements; the simulated checkout and the lifecycle; exports and the audit history; savings goals (the plan check, safe contributions in one transaction, privacy between accounts, no change to transactions or balances, nothing deleted after a downgrade, the trigger); exchange rates saved per account | 244 of 244 checks pass |
 
 `finora_ui_tests --screenshots <folder>` also saves a picture of every page in both themes and of the forms.
 
@@ -203,11 +207,16 @@ Finora/
 │   │   ├── Budget.h/.cpp          Budget record, 80% / 100% / over rules, progress
 │   │   ├── PasswordPolicy.h/.cpp  Password rules and strength meter
 │   │   ├── AccountRules.h/.cpp    Email, name, recovery code and sign-in delay rules
-│   │   └── Session.h/.cpp         Who is signed in (only AuthService may change it)
+│   │   ├── Session.h/.cpp         Who is signed in (only AuthService may change it)
+│   │   ├── Plans.h/.cpp, Subscription.h/.cpp, CsvExport.h/.cpp   Plans, the subscription lifecycle, CSV text
+│   │   ├── Goal.h/.cpp            Savings goal rules, contributions, progress, months left
+│   │   └── ExchangeRates.h/.cpp   Typed rates, conversion, rounding half away from zero
 │   ├── database/              All SQL lives here
 │   │   ├── DatabaseManager.h/.cpp Open SQLite, upgrade, backup, transactions, settings; one owner per row
 │   │   ├── BudgetStore.h/.cpp     Save, load, change and delete budgets
 │   │   ├── UserStore.h/.cpp       Accounts, recovery codes, sessions, audit history
+│   │   ├── SubscriptionStore.h/.cpp  Subscriptions and payments of the signed-in person
+│   │   ├── GoalStore.h/.cpp       Savings goals and their contributions (plan checked here)
 │   │   └── InstanceLock.h/.cpp    Let only one copy of Finora run at a time
 │   └── ui/                    Qt Widgets user interface
 │       ├── AppController.h/.cpp   Sign-in window first, main window after; idle sign-out
@@ -223,6 +232,10 @@ Finora/
 │       ├── TransactionDialog.h/.cpp  The Add / Edit Transaction form
 │       ├── BudgetsPage.h/.cpp     The Budgets page
 │       ├── BudgetDialog.h/.cpp    The New / Edit Budget form
+│       ├── GoalsPage.h/.cpp       The Goals page
+│       ├── GoalDialogs.h/.cpp     The goal form, the money form and a goal's history
+│       ├── CurrencyPage.h/.cpp    Exchange rates, the converter and all balances in one currency
+│       ├── DatabaseStartup.h/.cpp Opening the database at start-up; asking before an upgrade
 │       ├── SettingsPage.h/.cpp    Appearance, data location, licences
 │       ├── Theme.h/.cpp           Colour tokens of both themes, fonts, style sheet, icons
 │       ├── UiHelpers.h/.cpp       Month names, money text, chips
@@ -237,7 +250,9 @@ Finora/
 │   ├── finora_tests.cpp       Core logic tests
 │   ├── finora_ui_tests.cpp    Interface tests
 │   ├── finora_db_tests.cpp    Database tests on real SQLite files
-│   └── finora_auth_tests.cpp  Account and security tests
+│   ├── finora_auth_tests.cpp  Account and security tests
+│   ├── finora_billing_tests.cpp  Plans, billing, the upgrades to versions 3 and 4, goals and rates
+│   └── InterruptedUpgrade.h   Test helper: interrupts an upgrade like a power cut
 └── docs/                      Design, requirements, progress record and viva preparation
 ```
 
@@ -250,6 +265,8 @@ Finora/
 - [Milestone 3 demonstration guide](docs/DEMO_MILESTONE3.md)
 - [Milestone 4 demonstration guide](docs/DEMO_MILESTONE4.md)
 - [Milestone 4 progress record: stages, files, tests, Argon2id settings, the Phase 4C security review](docs/MILESTONE4_PROGRESS.md)
+- [Milestone 5 demonstration guide](docs/DEMO_MILESTONE5.md)
+- [Milestone 5 progress record](docs/MILESTONE5_PROGRESS.md)
 - [Third-party notices: fonts, libsodium, Qt, SQLite](THIRD_PARTY_NOTICES.md)
 
 ## Subscription plans (simulated billing)
@@ -257,7 +274,7 @@ Finora/
 | Plan | Price per month | Built now, besides everything in the smaller plans |
 |---|---|---|
 | Finora Free | $0 | Transactions, dashboard, PKR, USD and EUR, up to 3 active budgets, budget alerts |
-| Finora Plus | $5.99 | Unlimited budgets, CSV export of transactions |
+| Finora Plus | $5.99 | Unlimited budgets, savings goals, CSV export of transactions |
 | Finora Pro | $12.99 | A monthly PDF summary |
 | Finora Business | $24.99 | The account's audit history |
 
@@ -266,7 +283,7 @@ Finora/
 - **Demonstrating renewals:** start `Finora.exe --billing-demo` to add the button "Demo: end this period now" to the Subscription page. It shows a renewal, a missed payment or an expiry live. It changes only that account's subscription dates.
 - **How a real payment provider would fit** (a server, hosted checkout pages, verified webhooks), and which providers are usable from Pakistan, is described in `docs/DESIGN.md`, section 12.
 
-## Known limitations at Milestone 4
+## Known limitations at Milestone 5
 
 - Accounts are local demonstration accounts: no server, no email, no online sign-in. A forgotten password is reset with a recovery code (see "Accounts, passwords and recovery").
 - Creating an account says when an email address already has an account on this computer; signing in and resetting never reveal it.
@@ -275,13 +292,15 @@ Finora/
 - Payments are simulated, and renewals are confirmed by the person each month. Without a stored card, nothing can be charged automatically.
 - Plans are enforced on this computer. Whoever owns the PC can edit the database file or set the clock back. Real enforcement needs a server that holds the subscription (Finora Online, planned).
 - Exported CSV and PDF files are ordinary files in the folder the person chooses. They are not encrypted.
-- Different currencies are never added together, so there is no single "total balance" across PKR, USD and EUR. That needs exchange rates (Milestone 5).
+- Different currencies are never added together in the records, the dashboard or the budgets. The Currency page shows a total across PKR, USD and EUR only as an estimate, with the rates you entered.
+- Finora never downloads exchange rates. A rate is only as current as the last time you saved it; the page shows that date.
+- A savings goal counts money you set aside; it does not create a transaction, so the dashboard balance does not change when you add money to a goal.
 - Search and filters work on the list already loaded into memory. That is fast for one person's records; very large data sets would need filtering in SQL.
 - Search, and matching a budget to its category, ignore upper and lower case only for the English letters A to Z.
 - The Transactions table is always sorted newest first; clicking a column header does not re-sort it.
 - On the Transactions page, "Food" and "food" are still listed as two categories in the filter. Budgets and the dashboard treat them as one.
 - A budget is the same limit every month; there are no different limits for different months yet.
-- Savings goals, the Reports page and exchange rates are not built yet; their pages say "Coming in Milestone N".
+- The Reports page is not built yet; it says "Coming in Milestone 6".
 - The build paths assume Qt is installed in `C:\Qt`.
 - The greeting is chosen each time the dashboard is shown; it does not change while you stay on the dashboard.
 - Only one copy of Finora can run at a time, because SQLite lets only one program write to the database at once. A second copy says Finora is already open and closes. This is checked per Windows user account; two different Windows users have separate data folders and separate databases. Details are in [docs/DESIGN.md](docs/DESIGN.md), section 7.9.

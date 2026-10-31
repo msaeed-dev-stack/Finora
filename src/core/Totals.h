@@ -5,8 +5,10 @@
 //  Plain C++ (no Qt), so the tests can check every rule directly.
 //
 //  Two rules hold everywhere in this file:
-//    1. Different currencies are NEVER added together. Finora has no
-//       exchange rates yet, so every total belongs to one currency.
+//    1. Different currencies are NEVER added together: every total here
+//       belongs to one currency. (Since Milestone 5 the Currency page can
+//       show an ESTIMATE of all balances in one currency, with the rates
+//       the person entered; see ExchangeRates.h. It never changes these totals.)
 //    2. Every addition is checked. If a total would become too large for
 //       a long long, the total is marked with overflow = true instead of
 //       silently turning into a wrong number.

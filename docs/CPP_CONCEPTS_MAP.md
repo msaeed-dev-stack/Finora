@@ -2,14 +2,14 @@
 
 Where each C++ concept appears in Finora's real source code. Only concepts that exist in the code are listed in the first table. Concepts that are not used yet are listed separately, with the milestone where they will appear naturally.
 
-Last updated: Milestone 4, Phase 4B, 30 October 2026.
+Last updated: Milestone 5, 31 October 2026.
 
 ## Concepts used in the code
 
 | C++ Concept | Where It Is Used | Example Function or File | Why It Is Used | How I Can Explain It |
 |---|---|---|---|---|
 | Variables | `int hour`, `int year`, `int month`, `int day`, `bool fileOpened` | `MainWindow::createPages`, `isValidIsoDate`, `DatabaseManager::open` | To hold values worked out while the program runs | "A variable is a named box in memory. `year` holds the four digits of the date as a number." |
-| Constants | `PAGE_COUNT = 7`, `MAX_AMOUNT_MINOR`, `SUPPORTED_CURRENCY_COUNT = 3`, `CURRENT_SCHEMA_VERSION = 2`, `TYPE_INCOME`, `CARD_COLUMNS = 3` | `Sidebar.h`, `Transaction.h`, `DatabaseManager.h`, `BudgetsPage.cpp` | Fixed values get one name, so a typo cannot change them | "The maximum amount is written once, in `MAX_AMOUNT_MINOR`, and every check uses that name." |
+| Constants | `PAGE_COUNT = 8`, `MAX_AMOUNT_MINOR`, `SUPPORTED_CURRENCY_COUNT = 3`, `CURRENT_SCHEMA_VERSION = 4`, `RATE_SCALE = 10000`, `GOAL_NAME_MAX_LENGTH = 40`, `TYPE_INCOME`, `CARD_COLUMNS = 3` | `Sidebar.h`, `Transaction.h`, `DatabaseManager.h`, `BudgetsPage.cpp` | Fixed values get one name, so a typo cannot change them | "The maximum amount is written once, in `MAX_AMOUNT_MINOR`, and every check uses that name." |
 | `double` | Pixel sizes, bar heights and animation progress in the chart and the progress ring. Never for money | `MoneyFlowChart::paintEvent`, `drawBar`, `ProgressRing::shownFraction` | Positions on the screen are not whole numbers, and an animation goes smoothly from 0.0 to 1.0 | "Money stays in whole paisa. Only the drawing uses `double`: a bar's height is the plot height times value divided by the top of the scale." |
 | `enum` | `BudgetStatus` (`BUDGET_ON_TRACK`, `BUDGET_WARNING`, `BUDGET_REACHED`, `BUDGET_OVER`), `ThemeMode` (`THEME_LIGHT`, `THEME_DARK`) | `Budget.h`, `Theme.h` | Each state gets a name instead of a magic number | "`status == BUDGET_OVER` is easier to read and harder to get wrong than `status == 3`." |
 | `int` | Hours, page numbers, dates, ids, counters | `greetingForHour(int hour)`, `Transaction::id` | Whole numbers | "A record id or a month is a whole number, so `int` fits." |
@@ -98,6 +98,18 @@ Last updated: Milestone 4, Phase 4B, 30 October 2026.
 | Error handling | `bool` results plus `lastError()`; `fail()` helper; error dialog and exit code 1 | `DatabaseManager`, `main.cpp` | The caller always knows what went wrong | "`open()` returns false and `lastError()` says why." |
 | Signals and slots | `connect(sidebar, &Sidebar::pageSelected, this, &MainWindow::showPage)` | `MainWindow` constructor | Qt calls a function when something happens | "When the sidebar emits `pageSelected`, Qt calls `showPage`." |
 | Program exit codes | `return 1` after a database failure; tests return 0 or 1 | `main.cpp`, `tests/*.cpp` | Report success or failure to Windows and CTest | "Exit code 1 means Finora stopped because of a problem." |
+| Fixed-point numbers | A rate with 4 decimal places kept as a whole number: `278.5` is `2785000` (`RATE_SCALE = 10000`) | `parseRate`, `formatRate` in `src/core/ExchangeRates.cpp` | A `double` cannot hold most decimal fractions exactly | "Like money in paisa, a rate is a `long long`; only the screen puts the decimal point back." |
+| Checked multiplication | `if (size > ((LLONG_MAX - toRate) / 2) / fromRate) return false;` | `convertAmount` | A product too large for a `long long` would wrap around to a wrong number | "I divide the limit instead of multiplying the numbers, so the test itself can never overflow." |
+| Rounding with whole numbers | `(2 * product + toRate) / (2 * toRate)` rounds half away from zero; `(remaining + months - 1) / months` rounds up | `convertAmount`, `goalProgressFor` | Integer division always rounds down; adding the right amount first changes the rounding | "Adding half the divisor before dividing rounds to the nearest; adding the divisor minus one rounds up." |
+| Checked addition with negative numbers | `amount > 0 && total > LLONG_MAX - amount` and `amount < 0 && total < LLONG_MIN - amount` | `addSignedChecked` in `ExchangeRates.cpp` | Balances can be negative, and their sum must not overflow either way | "I check both directions, the largest and the smallest `long long`." |
+| `std::stoi` and `substr` | `std::stoi(today.substr(0, 4))` reads the year of "2026-10-31" | `monthsUntil` in `src/core/Goal.cpp` | The date is already checked, so its parts can be read as numbers | "`substr(5, 2)` takes 2 characters from position 5: the month." |
+| A database transaction around read, check and write | `db.transaction()`, read the saved amount, `validateContribution`, `INSERT`, `commit()` | `GoalStore::addContribution` | Nothing may change the saved amount between the check and the save | "Either the checked contribution is saved, or `rollback()` leaves everything as it was." |
+| SQL trigger | `CREATE TRIGGER goal_saved_amount_stays_valid BEFORE INSERT ON goal_contributions ... RAISE(ABORT, ...)` | `DatabaseManager::upgradeToVersion4` | A second guard inside SQLite, behind the C++ rules | "SQLite runs the trigger before every new contribution and refuses one that would make the saved amount negative." |
+| `LEFT JOIN` with `GROUP BY` and `SUM` | Every goal with the sum of its contributions; `COALESCE` turns no rows into 0 | `GoalStore::loadGoals` | The saved amount is worked out from the history, never stored twice | "`LEFT JOIN` keeps a goal that has no contributions yet." |
+| Constructor overloading (more) | `GoalDialog()` for a new goal, `GoalDialog(goalToEdit)` for an existing one; `ContributionDialog(goal, takeOut)` serves both "Add money" and "Take out" | `src/ui/GoalDialogs.cpp` | One class, two ways to start | "The second constructor fills the form from the goal and fixes the currency once money is saved." |
+| Composition (more) | `GoalsPage` has a `GoalStore` member, built from the shared `DatabaseManager` | `GoalsPage.h` | The page needs the goal SQL, but must not contain it | "The page asks its `GoalStore`; only the store knows SQL." |
+| An enum as a function result | `enum StartupResult { STARTUP_OPENED, STARTUP_DECLINED, STARTUP_FAILED }` | `openDatabaseAtStartup` in `src/ui/DatabaseStartup.h` | Three outcomes need three names; a `bool` could only say two | "`main()` returns 0 for DECLINED and 1 for FAILED, so Windows knows which one happened." |
+| A process starting a copy of itself | `QProcess::start(QCoreApplication::applicationFilePath(), {"--interrupt-upgrade", path})`, then `kill()` | `tests/InterruptedUpgrade.h` | To test a real power cut, a program must really stop in the middle of a transaction | "The second copy begins an upgrade and is killed before COMMIT; SQLite's journal is left, exactly as after a crash." |
 
 ## Concepts not used yet
 

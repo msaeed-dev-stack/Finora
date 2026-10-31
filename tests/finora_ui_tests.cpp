@@ -27,6 +27,8 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QStackedWidget>
 #include <QTableWidget>
 #include <QTemporaryDir>
@@ -37,6 +39,7 @@
 #include <string>
 #include <vector>
 
+#include "InterruptedUpgrade.h"
 #include "auth/AuthService.h"
 #include "auth/PasswordHasher.h"
 #include "billing/SimulatedPaymentGateway.h"
@@ -54,7 +57,11 @@
 #include "ui/components/PasswordField.h"
 #include "ui/components/RecoveryCodesPanel.h"
 #include "ui/BudgetsPage.h"
+#include "ui/CurrencyPage.h"
 #include "ui/DashboardPage.h"
+#include "ui/DatabaseStartup.h"
+#include "ui/GoalDialogs.h"
+#include "ui/GoalsPage.h"
 #include "ui/MainWindow.h"
 #include "ui/SettingsPage.h"
 #include "ui/SubscriptionPage.h"
@@ -1360,9 +1367,9 @@ void testSubscriptionPage(TestCounter &counter, QApplication &app, const QString
     check(counter, "team members: not in Free, 'Online' in Business, never a tick",
           teamRow >= 0 && table->item(teamRow, 1)->text() == QString::fromUtf8("—")
               && table->item(teamRow, 4)->text() == "Online");
-    int goalsRow = comparisonRow(table, "Savings goals");
-    check(counter, "savings goals: 'Soon' on Plus, because they are not built yet",
-          goalsRow >= 0 && table->item(goalsRow, 2)->text() == "Soon");
+    int recurringRow = comparisonRow(table, "Recurring transactions");
+    check(counter, "recurring transactions: 'Soon' on Plus, because they are not built yet",
+          recurringRow >= 0 && table->item(recurringRow, 2)->text() == "Soon");
     saveWindowScreenshot(window, screenshotFolder, "c_subscription_free");
     findButton(page, "Hide the comparison")->click();
 
@@ -1659,9 +1666,446 @@ void testExportsFromTheScreens(TestCounter &counter, QApplication &app, const QS
     auth.signOut("signed_out");
 }
 
+// ---- Milestone 5: the Goals and Currency pages -------------------------
+
+void fillGoalDialogAndSave()
+{
+    GoalDialog *dialog = qobject_cast<GoalDialog *>(QApplication::activeModalWidget());
+    if (dialog == nullptr) {
+        return;
+    }
+    dialog->findChild<QLineEdit *>("goalNameEdit")->setText("New laptop");
+    QComboBox *currency = dialog->findChild<QComboBox *>("goalCurrencyBox");
+    currency->setCurrentIndex(currency->findData("PKR"));
+    dialog->findChild<QLineEdit *>("goalTargetEdit")->setText("250,000");
+    dialog->findChild<QCheckBox *>("goalHasDateBox")->setChecked(true);
+    dialog->findChild<QDateEdit *>("goalDateEdit")->setDate(QDate::currentDate().addMonths(5));
+    saveScreenshot(dialog, "m5_goal_dialog");
+    dialog->findChild<QPushButton *>("primaryButton")->click();   // Save Goal
+}
+
+QString nextContributionAmount;   // what fillContributionAndSave() types
+QString contributionError;        // the red message of the money form, if it refused
+
+void fillContributionAndSave()
+{
+    ContributionDialog *dialog = qobject_cast<ContributionDialog *>(QApplication::activeModalWidget());
+    if (dialog == nullptr) {
+        return;
+    }
+    dialog->findChild<QLineEdit *>("contributionAmountEdit")->setText(nextContributionAmount);
+    dialog->findChild<QLineEdit *>("contributionNoteEdit")->setText("From the test");
+    saveScreenshot(dialog, "m5_contribution_dialog");
+    dialog->findChild<QPushButton *>("primaryButton")->click();
+    // A refused amount keeps the form open: remember why, then cancel.
+    if (dialog->isVisible()) {
+        contributionError = dialog->findChild<QLabel *>("formError")->text();
+        findButton(dialog, "Cancel")->click();
+    }
+}
+
+int goalHistoryRows = -1;
+
+void readGoalHistoryAndClose()
+{
+    GoalHistoryDialog *dialog = qobject_cast<GoalHistoryDialog *>(QApplication::activeModalWidget());
+    if (dialog == nullptr) {
+        return;
+    }
+    goalHistoryRows = dialog->shownCount();
+    saveScreenshot(dialog, "m5_goal_history");
+    findButton(dialog, "Close")->click();
+}
+
+// The visible button with this text on the card of goal `goalId`.
+QPushButton *goalButton(QWidget *page, const QString &text, int goalId)
+{
+    QList<QPushButton *> buttons = page->findChildren<QPushButton *>();
+    for (int i = 0; i < buttons.size(); i++) {
+        if (buttons[i]->text() == text && buttons[i]->property("goalId").toInt() == goalId
+            && !buttons[i]->isHidden()) {
+            return buttons[i];
+        }
+    }
+    return nullptr;
+}
+
+void testGoalsAndCurrencyPages(TestCounter &counter, QApplication &app, const QString &folder,
+                               const QString &screenshotFolder)
+{
+    Session session;
+    DatabaseManager database("ui_goals");
+    database.open(folder + "/ui_goals.db");
+    database.attachSession(session);
+    PasswordHasher quick(1, 8192);
+    AuthService auth(database, session, quick, quick);
+    std::vector<std::string> codes;
+    std::string password = "Correct Horse 9!";
+    auth.signUp("Amna Siddiqui", "amna@example.com", password, codes);
+    SimulatedPaymentGateway gateway;
+    SubscriptionService service(database, gateway, true);   // demo mode: the paid period can be ended
+    std::string reference;
+
+    // Amna's records in all three currencies: PKR +100,000.00, USD -10.00, EUR +50.00.
+    Transaction salary = makeTransaction(TYPE_INCOME, 10000000, "PKR", "Salary", "October salary",
+                                         QDate::currentDate());
+    Transaction book = makeTransaction(TYPE_EXPENSE, 1000, "USD", "Education", "Online book", QDate::currentDate());
+    Transaction gift = makeTransaction(TYPE_INCOME, 5000, "EUR", "Gifts", "Birthday gift", QDate::currentDate());
+    database.addTransaction(salary);
+    database.addTransaction(book);
+    database.addTransaction(gift);
+
+    MainWindow window(database, &auth, &service);
+    window.resize(1280, 800);
+    window.show();
+    app.processEvents();
+    QButtonGroup *navGroup = window.findChild<QButtonGroup *>("navButtonGroup");
+    QStackedWidget *pageStack = window.findChild<QStackedWidget *>("pageStack");
+    GoalsPage *goalsPage = window.findChild<GoalsPage *>("goalsPage");
+    CurrencyPage *currencyPage = window.findChild<CurrencyPage *>("currencyPage");
+    DashboardPage *dashboard = window.findChild<DashboardPage *>("dashboardPage");
+    if (navGroup == nullptr || pageStack == nullptr || goalsPage == nullptr || currencyPage == nullptr
+        || dashboard == nullptr) {
+        check(counter, "the Goals and Currency pages exist", false);
+        return;
+    }
+    check(counter, "Goals and Currency are real pages now; only Reports still says 'coming soon'",
+          !navGroup->button(PAGE_GOALS)->accessibleName().contains("coming soon")
+              && !navGroup->button(PAGE_CURRENCY)->accessibleName().contains("coming soon")
+              && navGroup->button(PAGE_REPORTS)->accessibleName().contains("coming soon"));
+
+    // ---- Goals on Finora Free ----
+    navGroup->button(PAGE_GOALS)->click();
+    QPushButton *newGoal = findButton(goalsPage, "+  New Goal");
+    check(counter, "on Free, the Goals page is locked, explains Finora Plus and shows the empty state",
+          goalsPage->isLocked() && someLabelContains(goalsPage, "is part of Finora Plus")
+              && someLabelContains(goalsPage, "No savings goals yet") && !newGoal->icon().isNull());
+    check(counter, "the page says that goal money adds no transaction and leaves the balances alone",
+          someLabelContains(goalsPage, "does not add a transaction, so your balances and budgets do not change"));
+    saveWindowScreenshot(window, screenshotFolder, "m5_goals_free");
+    lastMessageText.clear();
+    QTimer::singleShot(0, answerNotNow);
+    newGoal->click();
+    check(counter, "'New Goal' on Free explains the plans instead of opening the form",
+          lastMessageText == "Savings goals" && lastMessageDetails.contains("Finora Plus")
+              && pageStack->currentIndex() == PAGE_GOALS && goalsPage->shownProgress().empty());
+
+    // ---- Goals on Finora Plus ----
+    service.payForPlan(PLAN_PLUS, false, reference);
+    navGroup->button(PAGE_GOALS)->click();
+    check(counter, "on Plus, the lock is gone", !goalsPage->isLocked() && newGoal->icon().isNull());
+    QTimer::singleShot(0, fillGoalDialogAndSave);
+    newGoal->click();
+    flushDeletedWidgets();
+    const std::vector<GoalProgress> &shown = goalsPage->shownProgress();
+    bool created = shown.size() == 1 && shown[0].goal.name == "New laptop" && shown[0].goal.targetMinor == 25000000;
+    check(counter, "the form creates the goal, and a toast confirms it",
+          created && toastText(&window) == "Goal created.");
+    if (!created) {
+        return;
+    }
+    int goalId = shown[0].goal.id;
+    check(counter, "with a date 5 months ahead, 6 months are left and PKR 41,666.67 a month is needed",
+          shown[0].monthsLeft == 6 && someLabelContains(goalsPage, "Save about PKR 41,666.67 a month"));
+    QString balanceBefore = dashboard->walletCard("PKR")->balanceText();
+
+    nextContributionAmount = "100,000";
+    QTimer::singleShot(0, fillContributionAndSave);
+    goalButton(goalsPage, "Add money", goalId)->click();
+    flushDeletedWidgets();
+    check(counter, "'Add money' saves PKR 100,000.00: 40% of the goal",
+          goalsPage->shownProgress()[0].goal.savedMinor == 10000000 && goalsPage->shownProgress()[0].percent == 40
+              && toastText(&window) == "Money added to the goal.");
+    saveWindowScreenshot(window, screenshotFolder, "m5_goals_plus");
+
+    nextContributionAmount = "150,000";
+    contributionError.clear();
+    QTimer::singleShot(0, fillContributionAndSave);
+    goalButton(goalsPage, "Take out", goalId)->click();
+    flushDeletedWidgets();
+    check(counter, "taking out more than is saved is refused by the form, and nothing changes",
+          contributionError == "You can take out at most what is saved."
+              && goalsPage->shownProgress()[0].goal.savedMinor == 10000000);
+    nextContributionAmount = "20,000";
+    QTimer::singleShot(0, fillContributionAndSave);
+    goalButton(goalsPage, "Take out", goalId)->click();
+    flushDeletedWidgets();
+    check(counter, "taking out PKR 20,000.00 leaves PKR 80,000.00",
+          goalsPage->shownProgress()[0].goal.savedMinor == 8000000
+              && toastText(&window) == "Money taken out of the goal.");
+    if (!screenshotFolder.isEmpty()) {
+        window.setDarkTheme(true);   // only for the pictures; the checks run in the light theme
+        saveWindowScreenshot(window, screenshotFolder, "m5_goals_plus_dark");
+        window.setDarkTheme(false);
+    }
+
+    // Goal money is set aside, not spent: the dashboard must not change.
+    std::vector<Transaction> records;
+    database.loadTransactions(records);
+    navGroup->button(PAGE_DASHBOARD)->click();
+    check(counter, "after adding and taking out goal money, the dashboard's PKR balance is unchanged",
+          dashboard->walletCard("PKR")->balanceText() == balanceBefore && balanceBefore == "PKR 100,000.00"
+              && records.size() == 3);
+    navGroup->button(PAGE_GOALS)->click();
+    flushDeletedWidgets();
+    goalHistoryRows = -1;
+    QTimer::singleShot(0, readGoalHistoryAndClose);
+    goalButton(goalsPage, "History", goalId)->click();
+    check(counter, "the history shows both entries", goalHistoryRows == 2);
+
+    // ---- After the plan has ended: the goal is kept ----
+    service.simulatePeriodEnd();   // the renewal date arrives: payment due
+    service.simulatePeriodEnd();   // the grace ends: back to Free
+    navGroup->button(PAGE_GOALS)->click();
+    flushDeletedWidgets();         // the cards of the Plus period are really gone now
+    check(counter, "after Plus ends, the goal and its PKR 80,000.00 are still shown, locked",
+          goalsPage->isLocked() && goalsPage->shownProgress().size() == 1
+              && goalsPage->shownProgress()[0].goal.savedMinor == 8000000
+              && !goalButton(goalsPage, "Add money", goalId)->icon().isNull());
+    lastMessageText.clear();
+    QTimer::singleShot(0, answerNotNow);
+    goalButton(goalsPage, "Add money", goalId)->click();
+    check(counter, "on Free, 'Add money' explains the plans instead of opening the form",
+          lastMessageText == "Savings goals" && goalsPage->shownProgress()[0].goal.savedMinor == 8000000);
+    saveWindowScreenshot(window, screenshotFolder, "m5_goals_after_downgrade");
+    QTimer::singleShot(0, answerYes);
+    goalButton(goalsPage, "Delete", goalId)->click();
+    flushDeletedWidgets();
+    check(counter, "on Free, the person may still delete the goal",
+          goalsPage->shownProgress().empty() && toastText(&window) == "Goal deleted.");
+
+    // ---- Currency ----
+    navGroup->button(PAGE_CURRENCY)->click();
+    app.processEvents();
+    QLineEdit *usdRate = currencyPage->findChild<QLineEdit *>("usdRateEdit");
+    QLineEdit *eurRate = currencyPage->findChild<QLineEdit *>("eurRateEdit");
+    QLineEdit *amount = currencyPage->findChild<QLineEdit *>("convertAmountEdit");
+    int longAmountWidth = amount->fontMetrics().horizontalAdvance("9,99,99,99,999.99");
+    check(counter, "the Amount box is wide enough for a long amount such as 9,99,99,99,999.99",
+          amount->width() >= longAmountWidth + 40);
+    QComboBox *fromBox = currencyPage->findChild<QComboBox *>("convertFromBox");
+    QComboBox *toBox = currencyPage->findChild<QComboBox *>("convertToBox");
+    QComboBox *totalBox = currencyPage->findChild<QComboBox *>("totalCurrencyBox");
+    check(counter, "Currency works on Free and starts without rates, so USD and EUR cannot be added to the total",
+          usdRate->text().isEmpty() && currencyPage->totalText() == "-"
+              && someLabelContains(currencyPage, "No rates saved yet."));
+    amount->setText("100");
+    check(counter, "without a USD rate, USD 100.00 cannot be converted",
+          currencyPage->conversionText() == "-" && someLabelContains(currencyPage, "Enter and save the USD rate"));
+
+    usdRate->setText("278.5");
+    eurRate->setText("301.2");
+    check(counter, "the rates are saved for this account and shown with 4 decimal places",
+          currencyPage->saveRates() && database.exchangeRates().usdInPkr == 2785000
+              && database.exchangeRates().eurInPkr == 3012000 && usdRate->text() == "278.5000"
+              && toastText(&window) == "Exchange rates saved.");
+
+    // Direction: 1 USD = 278.5 PKR, so USD to PKR multiplies and PKR to USD divides.
+    amount->setText("100");
+    check(counter, "USD 100.00 = PKR 27,850.00, and the rate used is shown",
+          currencyPage->conversionText() == "USD 100.00 = PKR 27,850.00"
+              && someLabelContains(currencyPage, "At 1 USD = 278.5000 PKR."));
+    fromBox->setCurrentIndex(fromBox->findData("PKR"));
+    toBox->setCurrentIndex(toBox->findData("USD"));
+    amount->setText("278.50");
+    check(counter, "the other way: PKR 278.50 = USD 1.00", currencyPage->conversionText() == "PKR 278.50 = USD 1.00");
+    fromBox->setCurrentIndex(fromBox->findData("EUR"));
+    amount->setText("10");
+    check(counter, "EUR 10.00 = USD 10.82: through PKR, rounded once, both rates shown",
+          currencyPage->conversionText() == "EUR 10.00 = USD 10.82"
+              && someLabelContains(currencyPage, "At 1 EUR = 301.2000 PKR and 1 USD = 278.5000 PKR."));
+
+    // All balances in one currency: each balance converted and rounded once, then added.
+    totalBox->setCurrentIndex(totalBox->findData("PKR"));
+    check(counter, "in PKR: 100,000.00 - 2,785.00 + 15,060.00 is about PKR 112,275.00",
+          currencyPage->totalText() == "≈ PKR 112,275.00");
+    totalBox->setCurrentIndex(totalBox->findData("USD"));
+    check(counter, "in USD: 359.07 - 10.00 + 54.08 is about USD 403.15",
+          currencyPage->totalText() == "≈ USD 403.15" && someLabelContains(currencyPage, "≈ USD 359.07"));
+    totalBox->setCurrentIndex(totalBox->findData("EUR"));
+    check(counter, "in EUR: 332.01 - 9.25 + 50.00 is about EUR 372.76",
+          currencyPage->totalText() == "≈ EUR 372.76");
+    totalBox->setCurrentIndex(totalBox->findData("PKR"));
+    fromBox->setCurrentIndex(fromBox->findData("USD"));
+    toBox->setCurrentIndex(toBox->findData("PKR"));
+    amount->setText("100");
+    saveWindowScreenshot(window, screenshotFolder, "m5_currency");
+    if (!screenshotFolder.isEmpty()) {
+        window.setDarkTheme(true);
+        saveWindowScreenshot(window, screenshotFolder, "m5_currency_dark");
+        window.setDarkTheme(false);
+    }
+
+    eurRate->clear();
+    check(counter, "without the EUR rate, the EUR balance 'needs a rate' and no total is shown",
+          currencyPage->saveRates() && database.exchangeRates().eurInPkr == 0 && currencyPage->totalText() == "-"
+              && someLabelContains(currencyPage, "needs a rate"));
+
+    usdRate->setText("27a");
+    check(counter, "an invalid rate is refused with a clear message, and the saved rate stays",
+          !currencyPage->saveRates() && someLabelContains(currencyPage, "USD rate: A rate can contain only digits")
+              && database.exchangeRates().usdInPkr == 2785000);
+    database.loadTransactions(records);
+    int pkr = 0;
+    int usd = 0;
+    int eur = 0;
+    for (int i = 0; i < static_cast<int>(records.size()); i++) {
+        if (records[i].currencyCode == "PKR" && records[i].amountMinor == 10000000) {
+            pkr++;
+        } else if (records[i].currencyCode == "USD" && records[i].amountMinor == 1000) {
+            usd++;
+        } else if (records[i].currencyCode == "EUR" && records[i].amountMinor == 5000) {
+            eur++;
+        }
+    }
+    check(counter, "no record was converted or changed: still PKR 100,000.00, USD 10.00 and EUR 50.00",
+          records.size() == 3 && pkr == 1 && usd == 1 && eur == 1);
+    auth.signOut("signed_out");
+}
+
+// ---- Milestone 5: the start-up question after an interrupted upgrade ----
+
+int upgradeQuestionsAsked = 0;   // how often the start-up question appeared
+QString upgradeQuestionText;     // its informative text
+QString upgradeAnswer;           // the button to click
+
+void answerUpgradeQuestion()
+{
+    QMessageBox *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+    if (box == nullptr) {
+        return;
+    }
+    upgradeQuestionsAsked++;
+    upgradeQuestionText = box->informativeText();
+    QList<QAbstractButton *> buttons = box->buttons();
+    for (int i = 0; i < buttons.size(); i++) {
+        if (buttons[i]->text() == upgradeAnswer) {
+            buttons[i]->click();
+            return;
+        }
+    }
+}
+
+// A layout 3 file (Phase 4C) with two transactions: made by Finora's own
+// classes, then the layout 4 tables are removed again.
+bool createLayout3File(const QString &path)
+{
+    {
+        DatabaseManager database("ui_startup_prepare");
+        Transaction salary = makeTransaction(TYPE_INCOME, 9000000, "PKR", "Salary", "Before the upgrade",
+                                             QDate(2026, 10, 1));
+        Transaction food = makeTransaction(TYPE_EXPENSE, 120050, "PKR", "Food", "Groceries", QDate(2026, 10, 5));
+        if (!database.open(path) || !database.addTransaction(salary) || !database.addTransaction(food)) {
+            return false;
+        }
+    }   // closed here
+    bool ok = false;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", "ui_layout3");
+        db.setDatabaseName(path);
+        if (db.open()) {
+            QSqlQuery query(db);
+            ok = query.exec("DROP TABLE goal_contributions") && query.exec("DROP TABLE goals")
+                 && query.exec("PRAGMA user_version = 3");
+        }   // `query` is destroyed here
+        db.close();
+    }
+    QSqlDatabase::removeDatabase("ui_layout3");
+    return ok;
+}
+
+// Every transaction of a file as text, read through a read-only connection.
+QString transactionRows(const QString &path)
+{
+    QString text;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", "ui_rows");
+        db.setDatabaseName(path);
+        db.setConnectOptions("QSQLITE_OPEN_READONLY");
+        if (db.open()) {
+            QSqlQuery query(db);
+            query.exec("SELECT id, type, amount_minor, currency_code, category, description, transaction_date, uuid "
+                       "FROM transactions ORDER BY id");
+            while (query.next()) {
+                for (int i = 0; i < 8; i++) {
+                    text += query.value(i).toString() + "|";
+                }
+                text += "\n";
+            }
+        }   // `query` is destroyed here
+        db.close();
+    }
+    QSqlDatabase::removeDatabase("ui_rows");
+    return text;
+}
+
+// Regression test: after a crash in the middle of an upgrade, the next
+// start asks again, and only "Upgrade and continue" upgrades the file.
+void testStartupAfterInterruptedUpgrade(TestCounter &counter, QApplication &app, const QString &parentFolder)
+{
+    QString folder = parentFolder + "/startup_interrupted";
+    QDir().mkpath(folder);
+    QString path = folder + "/finora.db";
+    bool prepared = createLayout3File(path);
+    QString recordsBefore = transactionRows(path);
+    check(counter, "a layout 3 file with 2 transactions is prepared",
+          prepared && DatabaseManager::storedSchemaVersion(path) == 3 && recordsBefore.count("\n") == 2);
+
+    check(counter, "a second copy of this program is killed in the middle of an upgrade of the file",
+          interruptUpgradeOf(path));
+    check(counter, "its layout cannot be read before it is opened",
+          DatabaseManager::storedSchemaVersion(path) == -1);
+
+    // The next start: the person chooses "Quit without changes".
+    upgradeQuestionsAsked = 0;
+    upgradeAnswer = "Quit without changes";
+    QTimer::singleShot(0, answerUpgradeQuestion);
+    StartupResult firstStart = STARTUP_FAILED;
+    {
+        DatabaseManager database("ui_startup_first");
+        firstStart = openDatabaseAtStartup(database, path);
+    }
+    app.processEvents();
+    check(counter, "Finora asks again before upgrading: once, about layout 3, after SQLite restored the file",
+          firstStart == STARTUP_DECLINED && upgradeQuestionsAsked == 1
+              && upgradeQuestionText.contains("Your data file uses layout 3."));
+    check(counter, "'Quit without changes' leaves the last saved state: layout 3, the same records, no backup",
+          DatabaseManager::storedSchemaVersion(path) == 3 && transactionRows(path) == recordsBefore
+              && !QFile::exists(path + "-journal") && !QFileInfo::exists(folder + "/backups"));
+
+    // The start after that: "Upgrade and continue".
+    upgradeQuestionsAsked = 0;
+    upgradeAnswer = "Upgrade and continue";
+    QTimer::singleShot(0, answerUpgradeQuestion);
+    {
+        DatabaseManager database("ui_startup_second");
+        StartupResult secondStart = openDatabaseAtStartup(database, path);
+        QString backup = database.lastBackupPath();
+        check(counter, "'Upgrade and continue' upgrades the file to layout 4, with a verified backup of layout 3",
+              secondStart == STARTUP_OPENED && upgradeQuestionsAsked == 1
+                  && database.schemaVersion() == CURRENT_SCHEMA_VERSION && !backup.isEmpty()
+                  && DatabaseManager::storedSchemaVersion(backup) == 3);
+    }
+    app.processEvents();
+    check(counter, "and both transactions are unchanged", transactionRows(path) == recordsBefore);
+
+    // An up-to-date file opens without any question.
+    upgradeQuestionsAsked = 0;
+    {
+        DatabaseManager database("ui_startup_current");
+        check(counter, "an up-to-date file opens without a question",
+              openDatabaseAtStartup(database, path) == STARTUP_OPENED && upgradeQuestionsAsked == 0);
+    }
+}
+
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
+    // testStartupAfterInterruptedUpgrade starts a second copy of this
+    // program, which stops in the middle of an upgrade (InterruptedUpgrade.h).
+    if (argc == 3 && std::string(argv[1]) == "--interrupt-upgrade") {
+        return runInterruptedUpgrade(QString::fromLocal8Bit(argv[2]));
+    }
     app.setApplicationName("Finora");
     app.setApplicationVersion(FINORA_VERSION);
 
@@ -1712,6 +2156,12 @@ int main(int argc, char *argv[])
     testSubscriptionPage(counter, app, temporaryFolder.path(), screenshotFolder);
     testCheckoutFromThePage(counter, app, temporaryFolder.path(), screenshotFolder);
     testExportsFromTheScreens(counter, app, temporaryFolder.path());
+
+    std::cout << "---- Milestone 5: the Goals and Currency pages ----\n";
+    testGoalsAndCurrencyPages(counter, app, temporaryFolder.path(), screenshotFolder);
+
+    std::cout << "---- Milestone 5: the start-up question after an interrupted upgrade ----\n";
+    testStartupAfterInterruptedUpgrade(counter, app, temporaryFolder.path());
 
     std::cout << "----------------------\n";
     std::cout << counter.checksRun << " checks, " << counter.checksFailed << " failed\n";

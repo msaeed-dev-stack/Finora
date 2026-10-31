@@ -2,7 +2,7 @@
 
 This document explains how Finora is organised and how its algorithms work. It describes only what exists in the code. Anything not built yet is marked **Planned — Not Yet Implemented**.
 
-Last updated: Milestone 4, Phase 4C, 31 October 2026.
+Last updated: Milestone 5, 31 October 2026.
 
 ## 1. Architecture
 
@@ -10,12 +10,12 @@ Finora is split into layers. Each layer has one job.
 
 | Layer | Folder | Job | Uses Qt? | Status |
 |---|---|---|---|---|
-| Core logic | `src/core` | Rules in plain C++: greeting, transaction validation, dates, currencies, reading and writing amounts, search and filters, checked totals per currency, budget rules, password and account rules, the Session, plans and entitlements, the subscription lifecycle, CSV text | No | Done for Milestones 1 to 4C |
-| Database | `src/database` | Open the SQLite file, create and safely upgrade tables, backups; transactions, settings, budgets, accounts, subscriptions and payments; the single-copy lock | Yes, Qt SQL | Done for Milestones 2 to 4C |
+| Core logic | `src/core` | Rules in plain C++: greeting, transaction validation, dates, currencies, reading and writing amounts, search and filters, checked totals per currency, budget rules, password and account rules, the Session, plans and entitlements, the subscription lifecycle, CSV text, savings goal rules and progress, exchange rates and conversion | No | Done for Milestones 1 to 5 |
+| Database | `src/database` | Open the SQLite file, create and safely upgrade tables, backups; transactions, settings, budgets, accounts, subscriptions and payments, savings goals, the saved exchange rates; the single-copy lock | Yes, Qt SQL | Done for Milestones 2 to 5 |
 | Accounts | `src/auth` | Argon2id password hashing (libsodium) and the account rules: sign-up, sign-in, sessions, recovery | Yes, Qt Core | Done in Phase 4B |
 | Billing | `src/billing` | The payment gateway interface, the simulated gateway and the subscription lifecycle | Yes, Qt Core | Done in Phase 4C |
 | Reports | `src/reports` | The CSV export and the monthly PDF summary | Yes, Qt GUI | Done in Phase 4C |
-| User interface | `src/ui` | Windows, sidebar, light and dark theme, the pages, forms, dialogs, reusable components | Yes, Qt Widgets and Qt Svg | Done for Milestones 1 to 4C |
+| User interface | `src/ui` | Windows, sidebar, light and dark theme, the pages, forms, dialogs, reusable components | Yes, Qt Widgets and Qt Svg | Done for Milestones 1 to 5 |
 | Tests | `tests` | Check the core, the windows, the database, the accounts and the subscriptions automatically | Core tests no; the others yes | 5 test programs |
 
 ```mermaid
@@ -36,57 +36,68 @@ flowchart LR
 
 **Why the core has no Qt.** Rules such as "the amount must be above zero" live in `src/core` and use only standard C++: `int`, `long long`, `std::string`, arrays and structures. A small console program can test them directly.
 
-**Why all SQL is in one folder.** Only `src/database` contains SQL: `DatabaseManager` and the store classes `BudgetStore`, `UserStore` and `SubscriptionStore`. In `CMakeLists.txt`, Qt SQL is linked to `finora_database` as `PRIVATE`, so the user interface, the account, billing and report code cannot even see the SQL classes.
+**Why all SQL is in one folder.** Only `src/database` contains SQL: `DatabaseManager` and the store classes `BudgetStore`, `UserStore`, `SubscriptionStore` and `GoalStore`. In `CMakeLists.txt`, Qt SQL is linked to `finora_database` as `PRIVATE`, so the user interface, the account, billing and report code cannot even see the SQL classes.
 
 ## 2. Program start-up
 
 ```mermaid
 flowchart TD
-    A([Start Finora.exe]) --> B["main creates QApplication"]
-    B --> C["loadBundledFonts, then applyTheme light: Fusion style, palette, Inter font, finora.qss"]
-    C --> D["DatabaseManager database; path = defaultDatabasePath"]
-    D --> L{"instanceLock.tryLock succeeded?"}
+    A([Start Finora.exe]) --> B["main creates QApplication, loads the fonts and the light theme"]
+    B --> S{"libsodium starts?"}
+    S -- No --> G([Exit with code 1])
+    S -- Yes --> L{"instanceLock.tryLock succeeded?"}
     L -- "No, another copy runs" --> M["Finora is already open"]
-    M --> G([Exit with code 1])
-    L -- Yes --> V{"storedSchemaVersion is 1, older than 2?"}
+    M --> G
+    L -- Yes --> V{"storedSchemaVersion: an older layout?"}
     V -- Yes --> Q{"User clicks Upgrade and continue?"}
-    Q -- "No: Quit without changes" --> Z([Exit with code 0, file untouched])
-    Q -- Yes --> E
-    V -- No --> E{"database.open path succeeded? It backs up and upgrades if needed"}
-    E -- No --> F["Error dialog with the file path and the reason"]
+    Q -- "No: Quit without changes" --> Z([Exit with code 0, file not upgraded])
+    Q -- Yes --> E{"database.open, upgrade allowed: backup, then upgrade"}
+    V -- "No, or it could not be read" --> N{"database.open, upgrade NOT allowed"}
+    N -- "refused: it must be upgraded first" --> Q2{"Now readable: ask. Upgrade and continue?"}
+    Q2 -- No --> Z
+    Q2 -- Yes --> E
+    N -- opened --> H
+    N -- failed --> F
+    E -- opened --> H["AppController: the sign-in window, then the main window"]
+    E -- failed --> F["Error dialog with the file path and the reason"]
     F --> G
-    E -- Yes --> H["Create MainWindow database: applies the saved theme, builds the sidebar and 7 pages, shows the dashboard"]
     H --> I["app.exec: wait for user actions"]
-    I --> J["Window closed: window destroyed, then database closed"]
-    J --> K([Exit with code 0])
+    I --> K([Exit with code 0])
 ```
 
-Pseudocode for `main()` in `src/main.cpp`:
+Pseudocode for `main()` in `src/main.cpp` and `openDatabaseAtStartup()` in `src/ui/DatabaseStartup.cpp`:
 
 ```text
-CREATE the Qt application and set its name and version
-CALL loadBundledFonts() and applyTheme(application, THEME_LIGHT)
-path = DatabaseManager::defaultDatabasePath()
-IF NOT instanceLock.tryLock() THEN         // finora.lock next to finora.db
-    SHOW "already open" or the error, RETURN 1
-END IF
-version = DatabaseManager::storedSchemaVersion(path)   // read-only peek
-IF version is 1 (older than CURRENT_SCHEMA_VERSION) THEN
-    IF the user does NOT click "Upgrade and continue" THEN
-        RETURN 0                     // nothing was changed
-    END IF
-END IF
-CREATE a DatabaseManager called database
-IF NOT database.open(path) THEN
-    SHOW an error dialog with path and database.lastError()
-    RETURN 1                         // Finora never runs without saving
-END IF
-CREATE the main window, giving it the database, and SHOW it
-RUN the event loop until the window is closed
-RETURN the exit code                 // database closes automatically (RAII)
+main():
+    CREATE the Qt application; CALL loadBundledFonts() and applyTheme(application, THEME_LIGHT)
+    IF libsodium cannot start THEN SHOW the reason, RETURN 1
+    path = DatabaseManager::defaultDatabasePath()
+    IF NOT instanceLock.tryLock() THEN SHOW "already open" or the error, RETURN 1   // finora.lock
+    result = openDatabaseAtStartup(database, path)
+    IF result is DECLINED THEN RETURN 0              // the file was not upgraded
+    IF result is FAILED THEN SHOW the path and database.lastError(), RETURN 1
+    ATTACH the Session; CREATE AuthService, SubscriptionService and AppController
+    RUN the event loop until the last window closes; sign out; RETURN the exit code
+
+openDatabaseAtStartup(database, path):
+    version = storedSchemaVersion(path)              // read-only; -1 if it cannot be read
+    agreed = false
+    IF version is older (1 to CURRENT_SCHEMA_VERSION - 1) THEN
+        IF NOT askToUpgrade(path, version) THEN RETURN DECLINED
+        agreed = true
+    database.setUpgradeAllowed(agreed)
+    IF database.open(path) THEN RETURN OPENED         // a new or up-to-date file, or agreed
+    IF NOT database.upgradeNeeded() THEN RETURN FAILED
+    // The layout could not be read before, for example because an earlier upgrade
+    // was cut off by a crash. Opening let SQLite restore the last saved state.
+    version = storedSchemaVersion(path)
+    IF version is not older THEN RETURN FAILED
+    IF NOT askToUpgrade(path, version) THEN RETURN DECLINED
+    database.setUpgradeAllowed(true)
+    IF database.open(path) THEN RETURN OPENED ELSE RETURN FAILED
 ```
 
-`database` is declared before `window`. C++ destroys local objects in the reverse order, so the window is destroyed first and the database is closed last.
+`session` and `database` are declared before the controller and its windows. C++ destroys local objects in the reverse order, so the windows are destroyed first and the database is closed last. Section 13.8 explains why the upgrade question has three steps.
 
 ## 3. Page navigation
 
@@ -228,16 +239,18 @@ The file is not in the program folder, because programs installed under `C:\Prog
 
 ### 7.4 Schema versioning
 
-SQLite keeps a whole number called `user_version` inside every database file, for the program's own use. Finora uses it as the schema version. The constant `CURRENT_SCHEMA_VERSION` in `DatabaseManager.h` is 2 since Phase 4A.
+SQLite keeps a whole number called `user_version` inside every database file, for the program's own use. Finora uses it as the schema version. The constant `CURRENT_SCHEMA_VERSION` in `DatabaseManager.h` is 4 since Milestone 5 (2 in Phase 4A, 3 in Phase 4C).
 
 | `user_version` in the file | Meaning | What `upgradeSchema()` does |
 |---|---|---|
-| 0 | New, empty file | Creates the version 1 tables and currencies, then upgrades them to version 2, all inside one database transaction. No backup is needed: there are no records yet |
-| 1 | A file from Milestone 2 or 3 | Saves and checks a backup, then upgrades to version 2 inside one transaction (section 10.3) |
-| 2 | Up to date | Nothing |
-| 3 or more | Made by a newer Finora | Refuses to open and leaves the file unchanged |
+| 0 | New, empty file | Creates the version 1 tables and currencies, then upgrades them step by step to version 4, all inside one database transaction. No backup is needed: there are no records yet |
+| 1 | A file from Milestone 2 or 3 | Saves and checks a backup, then upgrades to versions 2, 3 and 4 inside one transaction (section 10.3) |
+| 2 | A file from Phase 4A or 4B | Saves and checks a backup, then upgrades to versions 3 and 4 inside one transaction (section 12.2) |
+| 3 | A file from Phase 4C | Saves and checks a backup, then upgrades to version 4 inside one transaction (section 13.2) |
+| 4 | Up to date | Nothing |
+| 5 or more | Made by a newer Finora | Refuses to open and leaves the file unchanged |
 
-Inside the transaction, either every step is saved by `commit()`, or `rollback()` undoes all of them, so a half-created database cannot exist. The statements also use `CREATE TABLE IF NOT EXISTS` and `INSERT OR IGNORE`, so repeating them can never create duplicates. Phase 4A added the next step, "if the version is below 2, upgrade to version 2", described in section 10.3.
+Inside the transaction, either every step is saved by `commit()`, or `rollback()` undoes all of them, so a half-created database cannot exist. The statements also use `CREATE TABLE IF NOT EXISTS` and `INSERT OR IGNORE`, so repeating them can never create duplicates. Each later phase added one step, "if the version is below N, upgrade to version N", so an old file passes through every step in order.
 
 ### 7.5 Opening the database
 
@@ -1075,3 +1088,202 @@ Each row separates what an official source **confirms** from what still **needs 
 - **An upgrade starts a new month at the full price,** without a refund for the unused part. The checkout says so.
 - **Some features are not built yet.** Many are marked "Soon", and Business team features are marked "Online" (they need Finora Online). The page never shows a tick for them.
 - **Exported files are not encrypted.**
+
+## 13. Milestone 5: savings goals and exchange rates
+
+Two features from Finora's plan: **savings goals with safe contributions and progress** (a Finora Plus feature, as in the plan table of section 12.3), and **PKR, USD and EUR with exchange rates that the person enters**, with documented rounding (on every plan).
+
+### 13.1 Who does what
+
+| Part | Layer | Job |
+|---|---|---|
+| `Goal`, `GoalContribution`, `GoalProgress` | core | The records, `validateGoal`, `validateContribution`, `monthsUntil` and `goalProgressFor`. Plain C++, tested directly |
+| `ExchangeRates` | core | `parseRate`, `formatRate`, `rateInPkr`, `convertAmount` and `addSignedChecked` |
+| `DatabaseManager::upgradeToVersion4` | database | The two new tables, an index and a trigger |
+| `DatabaseManager::exchangeRates`, `saveExchangeRates` | database | The person's own rates, kept with their settings |
+| `GoalStore` | database | All goal SQL. It checks the plan for every change and takes the owner only from the Session |
+| `GoalsPage`, `GoalDialog`, `ContributionDialog`, `GoalHistoryDialog` | ui | The Goals page and its three small windows |
+| `CurrencyPage` | ui | The rates, the converter and all balances in one currency |
+
+### 13.2 Schema version 4
+
+Two new tables. No existing table or row is changed. The upgrade itself works as before: a verified backup first, then one transaction, a foreign key check, the audit event "Schema version 3 to 4", and a rollback on any failure.
+
+```mermaid
+erDiagram
+    users ||--o{ goals : "owns"
+    goals ||--o{ goal_contributions : "has"
+    currencies ||--o{ goals : "currency of"
+    goals {
+        INTEGER id PK
+        INTEGER user_id FK "NOT NULL"
+        TEXT name "1 to 40 characters, unique per person"
+        TEXT currency_code FK
+        INTEGER target_minor "1 to 999,999,999,999"
+        TEXT target_date "NULL = no date"
+        TEXT created_at
+        TEXT updated_at
+    }
+    goal_contributions {
+        INTEGER id PK
+        INTEGER goal_id FK "ON DELETE CASCADE"
+        INTEGER amount_minor "not 0; + in, - out"
+        TEXT contribution_date "a real date"
+        TEXT note "at most 100 characters"
+        TEXT created_at
+    }
+```
+
+- **`goals.user_id` is `NOT NULL`.** Goals are a Plus feature, and plans belong to accounts, so every goal has an owner.
+- **`goals_one_name_per_owner`:** a `UNIQUE` index on `(user_id, lower(name))`. "Laptop" and "laptop" count as the same name for one person; two people may use the same name.
+- **The saved amount is never stored.** It is the sum of the goal's contributions, worked out when the goals are loaded (`LEFT JOIN ... GROUP BY`). So it can never disagree with the history.
+- **The trigger `goal_saved_amount_stays_valid`** runs before every new contribution:
+
+```sql
+CREATE TRIGGER goal_saved_amount_stays_valid
+BEFORE INSERT ON goal_contributions
+WHEN (SELECT COALESCE(SUM(amount_minor), 0) FROM goal_contributions WHERE goal_id = NEW.goal_id)
+     + NEW.amount_minor NOT BETWEEN 0 AND 999999999999
+BEGIN
+  SELECT RAISE(ABORT, 'The saved amount of a goal must stay between zero and the largest amount.');
+END
+```
+
+### 13.3 The rules for a contribution
+
+```text
+validateContribution(contribution, savedMinor):
+    IF amount = 0                         THEN "The amount must be more than zero."
+    IF |amount| > MAX_AMOUNT_MINOR        THEN "The amount is too large."
+    IF the date is not a real date        THEN "Please choose a valid date."
+    IF the note is longer than 100        THEN "The note can have at most 100 characters."
+    IF amount < 0 (money taken out):
+        IF -amount > savedMinor           THEN "You can take out at most what is saved."
+        RETURN ""                         // the total only gets smaller: no overflow possible
+    newTotal = savedMinor
+    IF NOT addChecked(newTotal, amount) OR newTotal > MAX_AMOUNT_MINOR
+                                          THEN "The saved amount would become too large."
+    RETURN ""
+```
+
+`GoalStore::addContribution` applies these rules inside one database transaction:
+
+```text
+addContribution(contribution):
+    requireFeature(FEATURE_SAVINGS_GOALS)          // Finora Plus or larger, from the person's own row
+    owner = the signed-in user's id                // from the Session, never from the screen
+    BEGIN
+        saved = SUM of the goal's contributions, only if the goal belongs to owner
+        IF there is no such goal THEN ROLLBACK, "No goal with id N was found."
+        problem = validateContribution(contribution, saved)
+        IF problem THEN ROLLBACK, problem
+        INSERT the contribution                    // the trigger checks the new sum once more
+    COMMIT
+```
+
+- **Contributions are never edited or deleted one by one.** A mistake is corrected with a new entry, so the history always explains the saved amount.
+- **The currency of a goal cannot change once money is in it,** because the saved amount is in that currency. `GoalStore::updateGoal` refuses, and the form disables the currency box.
+- **Money in a goal is not a transaction.** It is money the person has set aside, so the dashboard's balance does not change. This avoids counting the same money twice.
+
+### 13.4 Progress and the amount per month
+
+```text
+goalProgressFor(goal, today):
+    reached   = saved >= target
+    percent   = min(100, percentUsed(saved, target))       // whole percent, rounded down
+    remaining = target - saved   (0 once reached)
+    IF there is no target date OR reached THEN RETURN
+    IF targetDate < today THEN overdue = true; RETURN      // ISO dates compare like text
+    monthsLeft = monthsUntil(today, targetDate)
+    monthlyNeeded = (remaining + monthsLeft - 1) / monthsLeft  // ceiling division
+
+monthsUntil(today, target) = (target.year x 12 + target.month) - (today.year x 12 + today.month) + 1
+```
+
+- **The current month counts.** From 31 October 2026 to 31 March 2027 is 6 months: October, November, December, January, February and March. A target in the current month gives 1, so the division never divides by zero.
+- **Rounding up** makes sure that saving the amount every month really reaches the goal. PKR 170,000.00 over 6 months is 28,333.333..., shown as PKR 28,333.34.
+
+### 13.5 Exchange rates and rounding
+
+- **A rate says how many Pakistani Rupees one unit is worth:** "1 USD = 278.5000 PKR". It has 4 decimal places and is stored as a whole number: `278.5` is `2785000` (`RATE_SCALE = 10000`). PKR's own rate is `10000`. The largest rate is 1,000,000.0000.
+- **`parseRate`** reads typed text digit by digit, like `parseAmount`: digits and one decimal point, at most 4 decimals, more than zero, not above the largest rate. No `double` is ever used.
+- **Converting** (`convertAmount`):
+
+```text
+convertAmount(amount, from, to, rates):
+    fromRate = rateInPkr(from); toRate = rateInPkr(to)
+    IF either rate is missing (0) THEN refuse
+    size = |amount|
+    IF size > ((LLONG_MAX - toRate) / 2) / fromRate THEN refuse    // checked multiplication
+    product = size x fromRate
+    rounded = (2 x product + toRate) / (2 x toRate)               // half away from zero
+    RETURN rounded, with the sign of amount
+```
+
+- **Why `(2 x product + toRate) / (2 x toRate)` rounds correctly:** it is `product / toRate + 1/2`, rounded down by integer division. A remainder of exactly half moves up to the next whole number, and the sign is put back afterwards, so -0.5 becomes -1 ("away from zero").
+- **Through PKR, rounded once.** EUR to USD uses `amount x rate(EUR) / rate(USD)` in one step, so there is only one rounding. EUR 10.00 at 301.2 and 278.5 gives `1000 x 3012000 / 2785000 = 1081.5...`, which is USD 10.82.
+- **Where the rates live:** in the person's own settings (`usd_in_pkr`, `eur_in_pkr` and `rates_saved_on`), saved together in one transaction as readable text such as `278.5000`. Reading them goes through `parseRate` again, so a value edited by hand into nonsense counts as "not entered".
+- **What is converted:** only what the Currency page shows. Records are never converted, and the dashboard and budgets still never add currencies together.
+
+### 13.6 All balances in one currency
+
+```text
+FOR each currency that has transactions
+    balance = income - expenses of all time (balanceOf)
+    IF its rate is missing THEN show "needs a rate"; the total is not shown
+    ELSE converted = convertAmount(balance, currency, chosen)
+         total = total + converted   with addSignedChecked (a balance can be negative)
+SHOW "≈ " + total, with the note "An estimate with your own rates."
+```
+
+`addSignedChecked` is a checked addition for numbers that may be negative. `addChecked` from Phase 4A accepts only amounts of zero or more, because it adds up amounts, not balances.
+
+**Each balance is rounded once, then the rounded amounts are added.** Every line on the page shows a real conversion of that line, and the total is exactly the sum of the lines shown. It can differ by a cent or two from converting an unrounded sum, which is one more reason it is labelled as an estimate. Example with 1 USD = 278.5 PKR and 1 EUR = 301.2 PKR, and balances of PKR 100,000.00, USD -10.00 and EUR 50.00:
+
+| Shown in | PKR line | USD line | EUR line | Total |
+|---|---|---|---|---|
+| PKR | 100,000.00 | -2,785.00 | 15,060.00 | ≈ PKR 112,275.00 |
+| USD | 359.07 | -10.00 | 54.08 | ≈ USD 403.15 |
+| EUR | 332.01 | -9.25 | 50.00 | ≈ EUR 372.76 |
+
+**Money in savings goals is still part of these balances,** because a contribution is not a transaction (section 13.3). The balances card on the Currency page says so, and the Goals page says that adding or taking out money "does not add a transaction, so your balances and budgets do not change".
+
+### 13.7 The plan and the screens
+
+- **On Finora Free:** the Goals page shows a banner: "Savings goals" is part of Finora Plus. Existing goals stay visible with their progress and history, and they can be deleted. "New Goal", "Add money", "Take out" and "Edit" show a lock and explain the plans.
+- **These locks only save the person a wasted form.** `GoalStore` refuses every change by itself; the tests call it directly, without any screen.
+- **The Currency page works on every plan,** because "PKR, USD and EUR" is a Free feature.
+
+### 13.8 Asking before an upgrade, also after a crash
+
+**The problem, found while testing on copies of a real file.** An upgrade runs inside one transaction. If the computer loses power in the middle of it, SQLite leaves its journal beside the file, and it uses the journal to undo the unfinished change the next time the file is opened for writing. A read-only connection cannot do that, so `storedSchemaVersion()`, which only reads, could not read such a file and returned -1. Before the fix, `main()` then skipped the question and `open()` upgraded the file straight away. No data was lost, because a verified backup was still made first, but the person was not asked.
+
+**The fix has two parts:**
+- **`DatabaseManager` refuses by itself.** `setUpgradeAllowed(false)` makes `open()` stop before it would upgrade a file that holds records. The file's saved records are not changed and no backup is made; `upgradeNeeded()` then returns true. A new, empty file and an up-to-date file still open normally. So even a screen that forgot to ask could not upgrade a file. The tests allow upgrades unless they turn this off, because they upgrade the files they prepare on purpose.
+- **The start-up steps ask at the right moment** (`openDatabaseAtStartup`, section 2). If the layout cannot be read before opening, the file is opened without permission to upgrade. That lets SQLite restore the last saved state, and `open()` refuses. Now the layout can be read, so the person is asked, with the right layout number. Only "Upgrade and continue" opens the file again, with permission.
+
+**After a crash in the middle of an upgrade, the next start is:**
+1. The read-only check cannot read the file (-1).
+2. `open()` without permission: SQLite undoes the unfinished change, and `open()` refuses because the file is still at the old layout. No backup is made.
+3. The question appears: "Your data file uses layout 3. Finora will upgrade it to layout 4..."
+4. "Quit without changes" leaves the file at its last saved state. "Upgrade and continue" makes a verified backup and upgrades it in one transaction, as always.
+
+**Tested with a real interruption.** The test programs start a second copy of themselves, which begins an upgrade-like transaction, writes enough that changed pages reach the file, and is then killed with `QProcess::kill()` before `COMMIT` (`tests/InterruptedUpgrade.h`). `finora_db_tests` checks the database part; `finora_ui_tests` runs the real start-up steps and answers the real question.
+
+### 13.9 Tests
+
+| Test program | What it checks for Milestone 5 |
+|---|---|
+| `finora_tests` | Goal and contribution rules at every edge, months left, rounding up, overdue and reached goals; reading and formatting rates, conversion between every pair of currencies in both directions, rounding just below, at and above half a cent, missing rates, checked multiplication, signed checked addition |
+| `finora_billing_tests` | The upgrade from a real version 3 file (every older row unchanged, a verified backup) and a rolled-back failed upgrade; the plan check; safe contributions in one transaction; goal money leaves the transactions, the balance and the budgets unchanged; privacy between two accounts; goals kept after a downgrade; SQLite's rules and the trigger; rates saved per account |
+| `finora_db_tests` | New files are version 4 with 13 tables; the upgrade from version 1 goes through to version 4; without permission, `open()` refuses to upgrade an older file and leaves it byte-for-byte unchanged, while new and up-to-date files still open; after a real interruption in the middle of an upgrade, `open()` without permission lets SQLite restore the last saved state, refuses and makes no backup, and with permission it upgrades with a verified backup |
+| `finora_ui_tests` | The Goals page on Free (locked), on Plus (create, add money, a refused withdrawal, take out, history) and after the plan ends (kept, locked, deletable); the dashboard balance stays the same when goal money moves; the Currency page (no rates, saving rates, an Amount box wide enough for 9,99,99,99,999.99, conversion in both directions and through PKR, the total in PKR, USD and EUR, a missing rate, a refused rate, no record changed); the start-up steps after a real interruption: the question is asked once, about layout 3, "Quit" keeps the last saved state, "Upgrade" upgrades with a verified backup, and an up-to-date file opens without a question |
+
+Separate checks for this milestone, outside the test programs, are recorded in `docs/MILESTONE5_PROGRESS.md`: the upgrade run on copies of a real layout-3 file (a clean upgrade, a failed one, a restored backup and a simulated crash), and 200,095 conversions compared with an independent exact calculation.
+
+### 13.10 Limitations of Milestone 5
+
+- **Rates are typed by the person.** Finora never downloads them, so a rate is only as current as the date shown on the page.
+- **Only USD and EUR need rates,** both measured in PKR. Other currencies are not supported.
+- **Goals have no automatic saving.** Money is put in by hand; there are no recurring contributions (recurring transactions are planned for Finora Plus).
+- **A goal's currency is fixed** once money is in it. To save in another currency, the person creates another goal.

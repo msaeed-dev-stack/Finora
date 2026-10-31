@@ -10,7 +10,9 @@
 #include <QScreen>
 
 #include "BudgetsPage.h"
+#include "CurrencyPage.h"
 #include "DashboardPage.h"
+#include "GoalsPage.h"
 #include "PlaceholderPage.h"
 #include "Theme.h"
 #include "TransactionsPage.h"
@@ -20,8 +22,7 @@
 
 // ---- Text for the pages that are not built yet ----------------------
 // One structure per page, in page-number order (see Sidebar.h). Only
-// the planned pages (Goals, Reports, Currency) still use these texts;
-// the other pages are real.
+// the planned Reports page still uses these texts; the other pages are real.
 struct PageInfo {
     const char *title;            // large heading at the top of the page
     const char *subtitle;         // grey line under the heading
@@ -238,6 +239,15 @@ void MainWindow::createPages()
             page = budgetsPage;
             break;
         }
+        case PAGE_GOALS: {
+            GoalsPage *goalsPage = new GoalsPage(database, pageStack);
+            connect(goalsPage, &GoalsPage::openPageRequested, this, &MainWindow::showPage);
+            page = goalsPage;
+            break;
+        }
+        case PAGE_CURRENCY:
+            page = new CurrencyPage(database, pageStack);
+            break;
         case PAGE_SUBSCRIPTION:
             subscriptionPage = new SubscriptionPage(database, budgetStore, subscriptions, pageStack);
             connect(subscriptionPage, &SubscriptionPage::openPageRequested, this, &MainWindow::showPage);
@@ -252,7 +262,7 @@ void MainWindow::createPages()
             page = settingsPage;
             break;
         default:
-            // Goals, Reports and Currency are planned: an honest "coming soon" page.
+            // Reports is planned: an honest "coming soon" page.
             page = new PlaceholderPage(PAGE_INFO[pageNumber].title, PAGE_INFO[pageNumber].subtitle,
                                        PAGE_INFO[pageNumber].iconName, PAGE_INFO[pageNumber].milestone,
                                        PAGE_INFO[pageNumber].plannedFeatures, pageStack);

@@ -99,6 +99,7 @@ bool DatabaseManager::open(const QString &databasePath)
 {
     errorMessage.clear();
     backupPath.clear();
+    needsUpgrade = false;
 
     if (opened) {
         return fail("This database is already open.");
@@ -190,6 +191,16 @@ QString DatabaseManager::lastBackupPath() const
 QString DatabaseManager::sqlConnectionName() const
 {
     return connectionName;
+}
+
+void DatabaseManager::setUpgradeAllowed(bool allowed)
+{
+    upgradeAllowed = allowed;
+}
+
+bool DatabaseManager::upgradeNeeded() const
+{
+    return needsUpgrade;
 }
 
 void DatabaseManager::attachSession(const Session &session)
@@ -514,12 +525,14 @@ bool DatabaseManager::enableForeignKeys()
 // Brings the tables up to CURRENT_SCHEMA_VERSION, one version at a time,
 // all inside one database transaction:
 //   version 0       a new, empty file: create the version 1 tables, then
-//                   upgrade them to version 2 and to version 3
+//                   upgrade them step by step to the newest version
 //   version 1       a file from Milestone 2 or 3: save and check a backup,
-//                   then upgrade it to version 2 and to version 3
+//                   then upgrade it to version 2, 3 and 4
 //   version 2       a file from Phase 4A or 4B: save and check a backup,
-//                   then upgrade it to version 3
-//   version 3       already up to date: nothing to do
+//                   then upgrade it to version 3 and 4
+//   version 3       a file from Phase 4C: save and check a backup, then
+//                   upgrade it to version 4
+//   version 4       already up to date: nothing to do
 //   higher version  made by a newer Finora: refuse and leave the file untouched
 bool DatabaseManager::upgradeSchema()
 {
@@ -535,9 +548,19 @@ bool DatabaseManager::upgradeSchema()
         return true;
     }
 
-    // A file that already has tables holds the user's records. A copy is
-    // saved and checked BEFORE anything in the file changes.
+    // A file that already has tables holds the user's records. It is
+    // upgraded only when that is allowed: Finora asks the person first.
+    // Reading the version above may have let SQLite finish undoing a
+    // change that was interrupted earlier (for example by a power cut);
+    // that only restores the last saved state.
     bool hasUserData = (version >= 1);
+    if (hasUserData && !upgradeAllowed) {
+        needsUpgrade = true;
+        return fail("This data file uses layout " + QString::number(version) + " and must be upgraded to layout "
+                    + QString::number(CURRENT_SCHEMA_VERSION) + " first. It was not changed.");
+    }
+
+    // A copy is saved and checked BEFORE anything in the file changes.
     if (hasUserData && !backupBeforeUpgrade(version)) {
         return false;
     }
@@ -558,6 +581,9 @@ bool DatabaseManager::upgradeSchema()
     }
     if (ok && version < 3) {
         ok = upgradeToVersion3();
+    }
+    if (ok && version < 4) {
+        ok = upgradeToVersion4();
     }
 
     // Every foreign key must still point to an existing row.
@@ -1018,6 +1044,69 @@ bool DatabaseManager::upgradeToVersion3()
     return ok;
 }
 
+// Version 3 -> 4 (Milestone 5). Runs inside the transaction started by
+// upgradeSchema(). It only ADDS two empty tables: no existing table or
+// row is changed.
+bool DatabaseManager::upgradeToVersion4()
+{
+    // ---- 1. Savings goals: one row per goal ----
+    // Goals are a Finora Plus feature, so a goal always belongs to an
+    // account (user_id NOT NULL). target_date is NULL for a goal without a date.
+    bool ok = runStatement(
+        "CREATE TABLE goals ("
+        "  id            INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  user_id       INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,"
+        "  name          TEXT    NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 40),"
+        "  currency_code TEXT    NOT NULL REFERENCES currencies (code),"
+        "  target_minor  INTEGER NOT NULL CHECK (target_minor > 0 AND target_minor <= 999999999999),"
+        "  target_date   TEXT    CHECK (target_date IS NULL OR target_date IS date(target_date)),"
+        "  created_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),"
+        "  updated_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))"
+        ")");
+    // Two goals of the same person may not have the same name ("Laptop"
+    // and "laptop" count as the same).
+    if (ok) {
+        ok = runStatement("CREATE UNIQUE INDEX goals_one_name_per_owner ON goals (user_id, lower(name))");
+    }
+
+    // ---- 2. Money put into a goal (positive) or taken out (negative) ----
+    // Contributions are never edited or deleted one by one: a mistake is
+    // corrected with a new contribution, so the history stays complete.
+    // Deleting a whole goal deletes its contributions with it (CASCADE).
+    if (ok) {
+        ok = runStatement(
+            "CREATE TABLE goal_contributions ("
+            "  id                INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  goal_id           INTEGER NOT NULL REFERENCES goals (id) ON DELETE CASCADE,"
+            "  amount_minor      INTEGER NOT NULL CHECK (amount_minor <> 0"
+            "                                            AND amount_minor BETWEEN -999999999999 AND 999999999999),"
+            "  contribution_date TEXT    NOT NULL CHECK (contribution_date IS date(contribution_date)),"
+            "  note              TEXT    NOT NULL DEFAULT '' CHECK (length(note) <= 100),"
+            "  created_at        TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))"
+            ")");
+    }
+    if (ok) {
+        ok = runStatement("CREATE INDEX goal_contributions_by_goal ON goal_contributions (goal_id, id)");
+    }
+
+    // ---- 3. A second guard behind the C++ rules ----
+    // A trigger is SQL that SQLite runs by itself before every new
+    // contribution. It refuses one that would make the saved amount
+    // negative or larger than the largest amount, even if some other
+    // program wrote to this file without Finora's checks.
+    if (ok) {
+        ok = runStatement(
+            "CREATE TRIGGER goal_saved_amount_stays_valid "
+            "BEFORE INSERT ON goal_contributions "
+            "WHEN (SELECT COALESCE(SUM(amount_minor), 0) FROM goal_contributions WHERE goal_id = NEW.goal_id)"
+            "     + NEW.amount_minor NOT BETWEEN 0 AND 999999999999 "
+            "BEGIN "
+            "  SELECT RAISE(ABORT, 'The saved amount of a goal must stay between zero and the largest amount.'); "
+            "END");
+    }
+    return ok;
+}
+
 // PRAGMA foreign_key_check lists every row whose foreign key points to a
 // row that does not exist. An empty result means every link is valid.
 bool DatabaseManager::checkForeignKeys()
@@ -1096,6 +1185,69 @@ bool DatabaseManager::saveSetting(const QString &key, const QString &value)
         return fail("Could not save a setting: " + query.lastError().text());
     }
     return true;
+}
+
+// The rates are saved as text such as "278.5000" and read back through
+// parseRate(), the same check that a typed rate goes through.
+ExchangeRates DatabaseManager::exchangeRates()
+{
+    ExchangeRates rates;
+    long long rate = 0;
+    if (parseRate(setting("usd_in_pkr", "").toStdString(), rate).empty()) {
+        rates.usdInPkr = rate;
+    }
+    if (parseRate(setting("eur_in_pkr", "").toStdString(), rate).empty()) {
+        rates.eurInPkr = rate;
+    }
+    return rates;
+}
+
+bool DatabaseManager::saveExchangeRates(const ExchangeRates &rates)
+{
+    errorMessage.clear();
+    if (!opened) {
+        return fail("The database is not open.");
+    }
+    // 0 means "not entered". Any other value must be a real rate.
+    if (rates.usdInPkr < 0 || rates.usdInPkr > MAX_RATE || rates.eurInPkr < 0 || rates.eurInPkr > MAX_RATE) {
+        return fail("A rate must be more than zero and at most " + QString::fromStdString(formatRate(MAX_RATE))
+                    + ".");
+    }
+
+    // "" for a rate that is not entered. (A QString made without a value
+    // would be saved as SQL NULL, which the settings tables refuse.)
+    QString usdText = "";
+    QString eurText = "";
+    if (rates.usdInPkr > 0) {
+        usdText = QString::fromStdString(formatRate(rates.usdInPkr));
+    }
+    if (rates.eurInPkr > 0) {
+        eurText = QString::fromStdString(formatRate(rates.eurInPkr));
+    }
+
+    // The three values are saved together or not at all.
+    QSqlDatabase db = QSqlDatabase::database(connectionName, false);
+    if (!db.transaction()) {
+        return fail("Could not start a database transaction: " + db.lastError().text());
+    }
+    bool ok = saveSetting("usd_in_pkr", usdText) && saveSetting("eur_in_pkr", eurText)
+              && saveSetting("rates_saved_on", QDate::currentDate().toString(Qt::ISODate));
+    if (!ok) {
+        QString reason = errorMessage;
+        db.rollback();
+        return fail(reason);
+    }
+    if (!db.commit()) {
+        QString reason = db.lastError().text();
+        db.rollback();
+        return fail("Could not save the rates: " + reason);
+    }
+    return true;
+}
+
+QString DatabaseManager::exchangeRatesSavedOn()
+{
+    return setting("rates_saved_on", "");
 }
 
 bool DatabaseManager::recordAuditEvent(const QString &eventType, const QString &details)

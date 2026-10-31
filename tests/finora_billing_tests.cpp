@@ -3,11 +3,14 @@
 //  Automated checks for subscriptions and billing (Milestone 4, Phase
 //  4C): the upgrade to schema version 3, the Free plan of every
 //  account, and the database rules that protect subscriptions and
-//  payments.
+//  payments. Since Milestone 5 also savings goals (a Finora Plus
+//  feature, so they need accounts and plans), the upgrade to schema
+//  version 4 and the saved exchange rates.
 //
 //  Every database lives in a temporary folder that QTemporaryDir deletes
 //  at the end, so the tests never touch the real Finora database.
 // =====================================================================
+#include <QDate>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -30,11 +33,15 @@
 #include "billing/SubscriptionService.h"
 #include "core/AccountRules.h"
 #include "core/Budget.h"
+#include "core/ExchangeRates.h"
+#include "core/Goal.h"
 #include "core/Plans.h"
 #include "core/Subscription.h"
+#include "core/Totals.h"
 #include "core/Transaction.h"
 #include "database/BudgetStore.h"
 #include "database/DatabaseManager.h"
+#include "database/GoalStore.h"
 #include "database/SubscriptionStore.h"
 #include "reports/ReportExporter.h"
 
@@ -250,14 +257,20 @@ const QStringList VERSION_2_TABLES = {
     "recovery_codes", "transactions", "user_settings", "users"
 };
 
+// The tables of schema version 3, which version 4 must leave untouched.
+const QStringList VERSION_3_TABLES = {
+    "app_settings", "audit_events", "budgets", "currencies", "login_sessions", "payments",
+    "recovery_codes", "subscriptions", "transactions", "user_settings", "users"
+};
+
 // ---- 4C.1: the subscription data model --------------------------------
 
 void testNewDatabase(TestCounter &counter, const QString &folder)
 {
     DatabaseManager database("billing_new");
     bool opened = database.open(folder + "/billing_new.db");
-    check(counter, "a new database is created at schema version 3",
-          opened && database.schemaVersion() == 3, database.lastError());
+    check(counter, "a new database is created at schema version 4",
+          opened && database.schemaVersion() == 4, database.lastError());
     QStringList tables = database.tableNames();
     check(counter, "it has the subscriptions and payments tables",
           tables.contains("subscriptions") && tables.contains("payments"), tables.join(", "));
@@ -349,7 +362,7 @@ void testSignUpIsAllOrNothing(TestCounter &counter, const QString &folder, const
 
 // Builds a real version 2 file: accounts, sessions, recovery codes,
 // settings, transactions and budgets made by Finora's own classes, then
-// the two version 3 tables removed again. Returns false on any problem.
+// the tables of versions 3 and 4 removed again. Returns false on any problem.
 bool createVersion2File(const QString &folder, const QString &name, const PasswordHasher &quick)
 {
     {
@@ -381,6 +394,8 @@ bool createVersion2File(const QString &folder, const QString &name, const Passwo
     return runSqlOnFile(folder + "/" + name + ".db", {
         "INSERT INTO transactions (user_id, type, amount_minor, currency_code, category, description, "
         "transaction_date) VALUES (NULL, 'income', 9000000, 'PKR', 'Salary', 'Before accounts', '2026-09-30')",
+        "DROP TABLE goal_contributions",
+        "DROP TABLE goals",
         "DROP TABLE payments",
         "DROP TABLE subscriptions",
         "DELETE FROM audit_events WHERE event_type = 'plan_started'",
@@ -406,8 +421,8 @@ void testUpgradeFromVersion2(TestCounter &counter, const QString &parentFolder, 
     long long lastEventBefore = numberFromFile(path, "SELECT MAX(id) FROM audit_events");
 
     TestAccounts accounts("billing_upgrade", folder, quick);   // opens and upgrades the file
-    check(counter, "open() upgrades the version 2 file to version 3",
-          accounts.database.isOpen() && accounts.database.schemaVersion() == 3,
+    check(counter, "open() upgrades the version 2 file to version 4 (through version 3)",
+          accounts.database.isOpen() && accounts.database.schemaVersion() == 4,
           accounts.database.lastError());
 
     // Every table of version 2 must be exactly as before, row by row.
@@ -436,9 +451,9 @@ void testUpgradeFromVersion2(TestCounter &counter, const QString &parentFolder, 
                                              "ON u.id = s.user_id WHERE s.started_at = u.created_at") == 2);
     check(counter, "the upgrade creates no payment", numberFromSql(accounts.connection,
                                                                    "SELECT COUNT(*) FROM payments") == 0);
-    check(counter, "the upgrade is written to the audit history as 2 to 3",
+    check(counter, "the upgrade is written to the audit history as 2 to 4",
           numberFromSql(accounts.connection, "SELECT COUNT(*) FROM audit_events WHERE event_type = "
-                                             "'database_upgraded' AND details LIKE 'Schema version 2 to 3%'") == 1);
+                                             "'database_upgraded' AND details LIKE 'Schema version 2 to 4%'") == 1);
     check(counter, "every foreign key still points to an existing row",
           numberFromSql(accounts.connection, "SELECT COUNT(*) FROM pragma_foreign_key_check") == 0);
 
@@ -598,7 +613,7 @@ void testCurrentPlan(TestCounter &counter, const QString &folder, const Password
     check(counter, "an active Plus row gives Plus", database.currentPlan() == PLAN_PLUS);
     check(counter, "Plus may use its features", database.requireFeature(FEATURE_UNLIMITED_BUDGETS));
     check(counter, "a planned feature is refused even when the plan includes it",
-          !database.requireFeature(FEATURE_SAVINGS_GOALS) && database.lastError().contains("planned"));
+          !database.requireFeature(FEATURE_RECURRING) && database.lastError().contains("planned"));
 
     setPlanDirectly(accounts.connection, "amna@example.com", "plus", "active", LONG_AGO, FAR_FUTURE);
     check(counter, "after a missed renewal, Plus stays during the grace period", database.currentPlan() == PLAN_PLUS);
@@ -1189,6 +1204,479 @@ void testExportsAndAuditHistory(TestCounter &counter, const QString &folder, con
     check(counter, "signed out, nothing can be exported", !exporter.exportTransactionsCsv(csvPath, rows));
 }
 
+// ---- Milestone 5: the upgrade from version 3 to 4 ----------------------
+
+// Builds a real version 3 file: two accounts, a transaction, a budget and
+// a paid (simulated) Plus subscription made by Finora's own classes, then
+// the version 4 tables removed again. Returns false on any problem.
+bool createVersion3File(const QString &folder, const QString &name, const PasswordHasher &quick)
+{
+    {
+        TestAccounts accounts(name, folder, quick);
+        SimulatedPaymentGateway gateway;
+        SubscriptionService service(accounts.database, gateway);
+        if (!signUp(accounts.auth, "Amna Siddiqui", "amna@example.com")) {
+            return false;
+        }
+        Transaction food = makeExpense("Food", 250000, "2026-10-05");
+        Budget foodBudget = makeBudget("Food", 2000000);
+        std::string reference;
+        bool saved = accounts.database.addTransaction(food) && accounts.budgets.addBudget(foodBudget)
+                     && service.payForPlan(PLAN_PLUS, false, reference);
+        accounts.auth.signOut("signed_out");
+        if (!saved || !signUp(accounts.auth, "Bilal Ahmed", "bilal@example.com")) {
+            return false;
+        }
+        accounts.auth.signOut("signed_out");
+    }   // the DatabaseManager closes the file here
+
+    return runSqlOnFile(folder + "/" + name + ".db", {
+        "DROP TABLE goal_contributions",
+        "DROP TABLE goals",
+        "PRAGMA user_version = 3"
+    });
+}
+
+void testUpgradeFromVersion3(TestCounter &counter, const QString &parentFolder, const PasswordHasher &quick)
+{
+    QString folder = parentFolder + "/upgrade_v3";
+    QDir().mkpath(folder);
+    QString path = folder + "/goals_upgrade.db";
+    bool prepared = createVersion3File(folder, "goals_upgrade", quick);
+    check(counter, "a version 3 file with 2 accounts, a paid Plus plan and its payment is prepared",
+          prepared && DatabaseManager::storedSchemaVersion(path) == 3
+              && numberFromFile(path, "SELECT COUNT(*) FROM payments WHERE status = 'succeeded'") == 1
+              && numberFromFile(path, "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'goal%'") == 0);
+    if (!prepared) {
+        return;
+    }
+
+    QStringList before = snapshotsOfFile(path, VERSION_3_TABLES);
+    long long lastEventBefore = numberFromFile(path, "SELECT MAX(id) FROM audit_events");
+
+    TestAccounts accounts("goals_upgrade", folder, quick);   // opens and upgrades the file
+    const QString &c = accounts.connection;
+    check(counter, "open() upgrades the version 3 file to version 4",
+          accounts.database.isOpen() && accounts.database.schemaVersion() == 4, accounts.database.lastError());
+
+    // Every table of version 3 must be exactly as before, row by row.
+    bool allSame = true;
+    for (int i = 0; i < VERSION_3_TABLES.size(); i++) {
+        QString condition = "1 = 1";
+        if (VERSION_3_TABLES[i] == "audit_events") {
+            condition = "id <= " + QString::number(lastEventBefore);   // the upgrade adds one event
+        }
+        if (tableSnapshot(c, VERSION_3_TABLES[i], condition) != before[i]) {
+            allSame = false;
+            std::cout << "        changed table: " << VERSION_3_TABLES[i].toStdString() << "\n";
+        }
+    }
+    check(counter, "every row of the 11 older tables is unchanged, including the subscription and payment",
+          allSame);
+    check(counter, "the two goal tables and the trigger were added, and the goal tables are empty",
+          numberFromSql(c, "SELECT COUNT(*) FROM sqlite_master WHERE name IN "
+                           "('goals', 'goal_contributions', 'goal_saved_amount_stays_valid')") == 3
+              && numberFromSql(c, "SELECT COUNT(*) FROM goals") == 0
+              && numberFromSql(c, "SELECT COUNT(*) FROM goal_contributions") == 0);
+    check(counter, "the upgrade is written to the audit history as 3 to 4",
+          numberFromSql(c, "SELECT COUNT(*) FROM audit_events WHERE event_type = 'database_upgraded' "
+                           "AND details LIKE 'Schema version 3 to 4%'") == 1);
+    check(counter, "every foreign key still points to an existing row",
+          numberFromSql(c, "SELECT COUNT(*) FROM pragma_foreign_key_check") == 0);
+
+    QString backup = accounts.database.lastBackupPath();
+    check(counter, "a verified backup of the version 3 file was saved first",
+          !backup.isEmpty() && DatabaseManager::storedSchemaVersion(backup) == 3
+              && numberFromFile(backup, "SELECT COUNT(*) FROM users") == 2
+              && numberFromFile(backup, "SELECT COUNT(*) FROM payments") == 1,
+          backup);
+
+    bool amnaIn = signIn(accounts.auth, "amna@example.com");
+    check(counter, "after the upgrade Amna signs in with her old password and is still on Plus",
+          amnaIn && accounts.database.currentPlan() == PLAN_PLUS, accounts.auth.lastError());
+    GoalStore goals(accounts.database);
+    Goal first;
+    first.name = "First goal";
+    first.currencyCode = "PKR";
+    first.targetMinor = 100000;
+    check(counter, "and she can create her first savings goal", goals.addGoal(first), goals.lastError());
+}
+
+void testUpgradeFromVersion3Rollback(TestCounter &counter, const QString &parentFolder,
+                                     const PasswordHasher &quick)
+{
+    // A version 3 file in which a table called "goal_contributions" already
+    // exists. The upgrade creates "goals" first and then fails, so the
+    // rollback must undo it.
+    QString folder = parentFolder + "/upgrade_v3_conflict";
+    QDir().mkpath(folder);
+    QString path = folder + "/goals_conflict.db";
+    bool prepared = createVersion3File(folder, "goals_conflict", quick)
+                    && runSqlOnFile(path, {"CREATE TABLE goal_contributions (note TEXT)"});
+    check(counter, "a version 3 file with a conflicting \"goal_contributions\" table is prepared", prepared);
+
+    QByteArray bytesBefore = readFile(path);
+    {
+        DatabaseManager database("goals_conflict_open");
+        check(counter, "the upgrade to version 4 is refused", !database.open(path));
+        std::cout << "        message: " << database.lastError().toStdString() << "\n";
+        check(counter, "the backup made before the attempt is kept", QFile::exists(database.lastBackupPath()));
+    }
+    check(counter, "after the rollback the file is still version 3", DatabaseManager::storedSchemaVersion(path) == 3);
+    check(counter, "after the rollback the file is byte-for-byte as before", readFile(path) == bytesBefore);
+    check(counter, "no goals table was left behind",
+          numberFromFile(path, "SELECT COUNT(*) FROM sqlite_master WHERE name = 'goals'") == 0);
+}
+
+// ---- Milestone 5: savings goals ----------------------------------------
+
+Goal makeGoal(const std::string &name, long long targetMinor, const std::string &targetDate)
+{
+    Goal goal;
+    goal.name = name;
+    goal.currencyCode = "PKR";
+    goal.targetMinor = targetMinor;
+    goal.targetDate = targetDate;
+    return goal;
+}
+
+GoalContribution makeContribution(int goalId, long long amountMinor)
+{
+    GoalContribution contribution;
+    contribution.goalId = goalId;
+    contribution.amountMinor = amountMinor;
+    contribution.date = "2026-10-31";
+    return contribution;
+}
+
+// The saved amount of one goal as loadGoals() reports it, or -1.
+long long savedOf(GoalStore &goals, int goalId)
+{
+    std::vector<Goal> list;
+    goals.loadGoals(list);
+    for (int i = 0; i < static_cast<int>(list.size()); i++) {
+        if (list[i].id == goalId) {
+            return list[i].savedMinor;
+        }
+    }
+    return -1;
+}
+
+void testGoalsNeedPlus(TestCounter &counter, const QString &folder, const PasswordHasher &quick)
+{
+    TestAccounts accounts("goals_plan", folder, quick);
+    GoalStore goals(accounts.database);
+    const QString &c = accounts.connection;
+    signUp(accounts.auth, "Amna Siddiqui", "amna@example.com");
+
+    Goal laptop = makeGoal("New laptop", 25000000, "2027-03-31");
+    check(counter, "on Free, GoalStore itself refuses a new goal and names Finora Plus",
+          !goals.addGoal(laptop) && goals.planBlocked() && goals.lastError().contains("Finora Plus"),
+          goals.lastError());
+    check(counter, "and nothing was stored", numberFromSql(c, "SELECT COUNT(*) FROM goals") == 0);
+    std::vector<Goal> list;
+    check(counter, "on Free, loading goals still works (an empty list)", goals.loadGoals(list) && list.empty());
+
+    setPlanDirectly(c, "amna@example.com", "plus", "active", FAR_FUTURE, FAR_FUTURE);
+    check(counter, "on Plus, the goal is saved and gets an id",
+          goals.addGoal(laptop) && laptop.id > 0 && !goals.planBlocked(), goals.lastError());
+    Goal sameName = makeGoal("  new LAPTOP ", 100000, "");
+    check(counter, "a second goal with the same name in other letters is refused",
+          !goals.addGoal(sameName) && goals.lastError().contains("already a goal") && !goals.planBlocked());
+    Goal noName = makeGoal("   ", 100000, "");
+    check(counter, "a goal without a name is refused before any SQL runs",
+          !goals.addGoal(noName) && goals.lastError() == "Please give the goal a name.");
+    Goal emergency = makeGoal("  Emergency fund ", 10000000, "");
+    check(counter, "a goal without a date is saved with a trimmed name and NULL as its date",
+          goals.addGoal(emergency)
+              && numberFromSql(c, "SELECT COUNT(*) FROM goals WHERE name = 'Emergency fund' "
+                                  "AND target_date IS NULL") == 1);
+    goals.loadGoals(list);
+    check(counter, "loadGoals returns both goals sorted by name, nothing saved yet",
+          list.size() == 2 && list[0].name == "Emergency fund" && list[0].targetDate.empty()
+              && list[1].name == "New laptop" && list[1].targetDate == "2027-03-31"
+              && list[1].targetMinor == 25000000 && list[0].savedMinor == 0 && list[1].savedMinor == 0);
+
+    setPlanDirectly(c, "amna@example.com", "business", "active", FAR_FUTURE, FAR_FUTURE);
+    Goal house = makeGoal("House", 500000000, "2035-12-31");
+    check(counter, "every larger plan includes goals too (Business)", goals.addGoal(house), goals.lastError());
+}
+
+void testGoalContributions(TestCounter &counter, const QString &folder, const PasswordHasher &quick)
+{
+    TestAccounts accounts("goals_money", folder, quick);
+    GoalStore goals(accounts.database);
+    const QString &c = accounts.connection;
+    signUp(accounts.auth, "Amna Siddiqui", "amna@example.com");
+    setPlanDirectly(c, "amna@example.com", "plus", "active", FAR_FUTURE, FAR_FUTURE);
+    Goal laptop = makeGoal("New laptop", 25000000, "2027-03-31");
+    goals.addGoal(laptop);
+
+    GoalContribution first = makeContribution(laptop.id, 5000000);   // 50,000.00 in
+    first.note = "October salary";
+    check(counter, "money put into a goal is saved and gets an id",
+          goals.addContribution(first) && first.id > 0, goals.lastError());
+    GoalContribution out = makeContribution(laptop.id, -2000000);    // 20,000.00 out
+    check(counter, "taking out less than is saved works", goals.addContribution(out), goals.lastError());
+    check(counter, "the goal now has 30,000.00 saved", savedOf(goals, laptop.id) == 3000000);
+
+    GoalContribution tooMuch = makeContribution(laptop.id, -3000001);
+    check(counter, "taking out 0.01 more than is saved is refused",
+          !goals.addContribution(tooMuch) && goals.lastError() == "You can take out at most what is saved.");
+    GoalContribution zero = makeContribution(laptop.id, 0);
+    check(counter, "an amount of zero is refused", !goals.addContribution(zero));
+    GoalContribution badDate = makeContribution(laptop.id, 100);
+    badDate.date = "2026-02-30";
+    check(counter, "an invalid date is refused", !goals.addContribution(badDate));
+    GoalContribution everything = makeContribution(laptop.id, -3000000);
+    check(counter, "taking out exactly what is saved works and leaves 0",
+          goals.addContribution(everything) && savedOf(goals, laptop.id) == 0);
+
+    GoalContribution largest = makeContribution(laptop.id, MAX_AMOUNT_MINOR);
+    GoalContribution onePaisa = makeContribution(laptop.id, 1);
+    check(counter, "the largest amount can be saved", goals.addContribution(largest), goals.lastError());
+    check(counter, "but not even 0.01 more: the total can never overflow",
+          !goals.addContribution(onePaisa) && goals.lastError() == "The saved amount would become too large.");
+    check(counter, "the refused contributions left no rows behind",
+          numberFromSql(c, "SELECT COUNT(*) FROM goal_contributions") == 4);
+    // BEGIN fails while another database transaction is still open.
+    check(counter, "every refusal ended its database transaction (a new one can begin)",
+          runSql(c, "BEGIN") && runSql(c, "ROLLBACK"));
+
+    std::vector<GoalContribution> history;
+    check(counter, "the history lists the 4 contributions, newest first",
+          goals.loadContributions(laptop.id, history) && history.size() == 4
+              && history[0].amountMinor == MAX_AMOUNT_MINOR && history[3].note == "October salary");
+
+    // The currency may change only while nothing is saved.
+    Goal trip = makeGoal("Trip", 50000, "");
+    goals.addGoal(trip);
+    trip.currencyCode = "USD";
+    check(counter, "the currency of a goal with nothing saved can change", goals.updateGoal(trip), goals.lastError());
+    GoalContribution tripMoney = makeContribution(trip.id, 1000);
+    goals.addContribution(tripMoney);
+    trip.currencyCode = "EUR";
+    check(counter, "once money is in, the currency cannot change",
+          !goals.updateGoal(trip) && goals.lastError().contains("currency cannot change"));
+    trip.currencyCode = "USD";
+    trip.name = "Summer trip";
+    trip.targetMinor = 80000;
+    check(counter, "the name and the target can still change",
+          goals.updateGoal(trip)
+              && textFromSql(c, "SELECT name || '/' || target_minor FROM goals WHERE currency_code = 'USD'")
+                     == "Summer trip/80000",
+          goals.lastError());
+
+    check(counter, "deleting a goal deletes its own contributions with it, and no others",
+          goals.deleteGoal(laptop.id)
+              && numberFromSql(c, "SELECT COUNT(*) FROM goal_contributions WHERE goal_id = "
+                                      + QString::number(laptop.id)) == 0
+              && numberFromSql(c, "SELECT COUNT(*) FROM goal_contributions") == 1);
+}
+
+// Money put into or taken out of a goal is not a transaction: the
+// transactions, the balance and the budgets stay exactly the same.
+void testGoalsLeaveBalancesAlone(TestCounter &counter, const QString &folder, const PasswordHasher &quick)
+{
+    TestAccounts accounts("goals_balances", folder, quick);
+    GoalStore goals(accounts.database);
+    const QString &c = accounts.connection;
+    signUp(accounts.auth, "Amna Siddiqui", "amna@example.com");
+    setPlanDirectly(c, "amna@example.com", "plus", "active", FAR_FUTURE, FAR_FUTURE);
+    Transaction salary = makeExpense("Salary", 10000000, "2026-10-01");
+    salary.type = TYPE_INCOME;
+    Transaction food = makeExpense("Food", 250000, "2026-10-05");
+    Budget foodBudget = makeBudget("Food", 2000000);
+    accounts.database.addTransaction(salary);
+    accounts.database.addTransaction(food);
+    accounts.budgets.addBudget(foodBudget);
+
+    std::vector<Transaction> before;
+    accounts.database.loadTransactions(before);
+    CurrencySummary pkrBefore = summarizeByCurrency(before, "2026-10")[0];   // PKR comes first
+    QString transactionsBefore = tableSnapshot(c, "transactions", "1 = 1");
+    QString budgetsBefore = tableSnapshot(c, "budgets", "1 = 1");
+
+    Goal laptop = makeGoal("New laptop", 25000000, "");
+    goals.addGoal(laptop);
+    GoalContribution moneyIn = makeContribution(laptop.id, 5000000);     // 50,000.00 in
+    GoalContribution moneyOut = makeContribution(laptop.id, -1000000);   // 10,000.00 out
+    bool saved = goals.addContribution(moneyIn) && goals.addContribution(moneyOut);
+
+    std::vector<Transaction> after;
+    accounts.database.loadTransactions(after);
+    CurrencySummary pkrAfter = summarizeByCurrency(after, "2026-10")[0];
+    check(counter, "putting money into a goal and taking some out adds no transaction and changes none",
+          saved && after.size() == before.size() && tableSnapshot(c, "transactions", "1 = 1") == transactionsBefore);
+    check(counter, "so the PKR balance stays PKR 97,500.00, and this month's income and spending too",
+          pkrBefore.currencyCode == "PKR" && balanceOf(pkrAfter) == 9750000 && balanceOf(pkrAfter) == balanceOf(pkrBefore)
+              && pkrAfter.monthIncomeMinor == pkrBefore.monthIncomeMinor
+              && pkrAfter.monthExpenseMinor == pkrBefore.monthExpenseMinor);
+    check(counter, "and the budgets are untouched", tableSnapshot(c, "budgets", "1 = 1") == budgetsBefore);
+    check(counter, "only the goal shows the money: PKR 40,000.00 set aside", savedOf(goals, laptop.id) == 4000000);
+}
+
+void testGoalsArePrivate(TestCounter &counter, const QString &folder, const PasswordHasher &quick)
+{
+    TestAccounts accounts("goals_private", folder, quick);
+    GoalStore goals(accounts.database);
+    const QString &c = accounts.connection;
+    signUp(accounts.auth, "Amna Siddiqui", "amna@example.com");
+    setPlanDirectly(c, "amna@example.com", "plus", "active", FAR_FUTURE, FAR_FUTURE);
+    Goal amnaGoal = makeGoal("Hajj", 100000000, "");
+    goals.addGoal(amnaGoal);
+    GoalContribution amnaMoney = makeContribution(amnaGoal.id, 2500000);
+    goals.addContribution(amnaMoney);
+    accounts.auth.signOut("signed_out");
+
+    signUp(accounts.auth, "Bilal Ahmed", "bilal@example.com");
+    setPlanDirectly(c, "bilal@example.com", "plus", "active", FAR_FUTURE, FAR_FUTURE);
+    std::vector<Goal> list;
+    check(counter, "Bilal does not see Amna's goal", goals.loadGoals(list) && list.empty());
+    Goal bilalGoal = makeGoal("Hajj", 50000000, "");
+    check(counter, "Bilal may use the same goal name as Amna", goals.addGoal(bilalGoal), goals.lastError());
+    GoalContribution intoAmna = makeContribution(amnaGoal.id, 100);
+    check(counter, "Bilal cannot put money into Amna's goal: it is \"not found\"",
+          !goals.addContribution(intoAmna) && goals.lastError().contains("was found"));
+    GoalContribution outOfAmna = makeContribution(amnaGoal.id, -100);
+    check(counter, "nor take money out of it", !goals.addContribution(outOfAmna));
+    Goal changed = amnaGoal;
+    changed.name = "Changed by Bilal";
+    check(counter, "nor change it", !goals.updateGoal(changed));
+    check(counter, "nor delete it", !goals.deleteGoal(amnaGoal.id));
+    std::vector<GoalContribution> history;
+    check(counter, "nor read its history", goals.loadContributions(amnaGoal.id, history) && history.empty());
+    check(counter, "Amna's goal and money are untouched",
+          textFromSql(c, "SELECT name FROM goals WHERE id = " + QString::number(amnaGoal.id)) == "Hajj"
+              && numberFromSql(c, "SELECT SUM(amount_minor) FROM goal_contributions WHERE goal_id = "
+                                      + QString::number(amnaGoal.id)) == 2500000);
+
+    accounts.auth.signOut("signed_out");
+    check(counter, "signed out, no goals can be loaded",
+          !goals.loadGoals(list) && goals.lastError() == "Please sign in first.");
+}
+
+void testGoalsAfterDowngrade(TestCounter &counter, const QString &folder, const PasswordHasher &quick)
+{
+    TestAccounts accounts("goals_downgrade", folder, quick);
+    SimulatedPaymentGateway gateway;
+    SubscriptionService service(accounts.database, gateway);
+    GoalStore goals(accounts.database);
+    const QString &c = accounts.connection;
+    signUp(accounts.auth, "Amna Siddiqui", "amna@example.com");
+    std::string reference;
+    check(counter, "Amna pays for Plus with the simulated checkout",
+          service.payForPlan(PLAN_PLUS, false, reference), service.lastError());
+    Goal car = makeGoal("Car", 300000000, "2028-01-31");
+    goals.addGoal(car);
+    GoalContribution money = makeContribution(car.id, 7500000);
+    goals.addContribution(money);
+
+    // The paid period and its grace both end: Finora Free applies again.
+    setPlanDirectly(c, "amna@example.com", "plus", "active", LONG_AGO, LONG_AGO);
+    check(counter, "after the plan has ended, Amna is on Free", accounts.database.currentPlan() == PLAN_FREE);
+    std::vector<Goal> list;
+    check(counter, "her goal and its 75,000.00 are kept and still load",
+          goals.loadGoals(list) && list.size() == 1 && list[0].savedMinor == 7500000);
+    GoalContribution more = makeContribution(car.id, 100);
+    check(counter, "on Free, no money can be put in", !goals.addContribution(more) && goals.planBlocked());
+    GoalContribution less = makeContribution(car.id, -100);
+    check(counter, "or taken out", !goals.addContribution(less) && goals.planBlocked());
+    Goal renamed = list[0];
+    renamed.name = "Family car";
+    check(counter, "or the goal changed", !goals.updateGoal(renamed) && goals.planBlocked());
+    check(counter, "nothing in the database changed",
+          numberFromSql(c, "SELECT COUNT(*) FROM goal_contributions") == 1
+              && textFromSql(c, "SELECT name FROM goals") == "Car");
+    check(counter, "on Free, a person may still delete their own goal",
+          goals.deleteGoal(car.id) && !goals.planBlocked() && numberFromSql(c, "SELECT COUNT(*) FROM goals") == 0,
+          goals.lastError());
+}
+
+// SQLite's own rules refuse bad goal rows, even from SQL that bypasses
+// Finora's C++ code.
+void testGoalDatabaseRules(TestCounter &counter, const QString &folder, const PasswordHasher &quick)
+{
+    TestAccounts accounts("goals_rules", folder, quick);
+    signUp(accounts.auth, "Amna Siddiqui", "amna@example.com");
+    const QString &c = accounts.connection;
+    QString amna = "(SELECT id FROM users WHERE email = 'amna@example.com')";
+    QString insertGoal = "INSERT INTO goals (user_id, name, currency_code, target_minor, target_date) VALUES ";
+
+    check(counter, "a target of zero is refused",
+          !runSql(c, insertGoal + "(" + amna + ", 'Zero', 'PKR', 0, NULL)"));
+    check(counter, "a goal without an owner is refused",
+          !runSql(c, insertGoal + "(NULL, 'Nobody', 'PKR', 100, NULL)"));
+    check(counter, "an impossible target date is refused",
+          !runSql(c, insertGoal + "(" + amna + ", 'Bad date', 'PKR', 100, '2026-02-30')"));
+    check(counter, "an unknown currency is refused",
+          !runSql(c, insertGoal + "(" + amna + ", 'Pounds', 'GBP', 100, NULL)"));
+    check(counter, "a valid goal is accepted", runSql(c, insertGoal + "(" + amna + ", 'Bike', 'PKR', 100000, NULL)"));
+    check(counter, "the same name in capitals is refused by the UNIQUE index",
+          !runSql(c, insertGoal + "(" + amna + ", 'BIKE', 'PKR', 100, NULL)"));
+
+    QString insertMoney = "INSERT INTO goal_contributions (goal_id, amount_minor, contribution_date) VALUES ";
+    QString bike = "(SELECT id FROM goals WHERE name = 'Bike')";
+    check(counter, "money can be put in with plain SQL", runSql(c, insertMoney + "(" + bike + ", 5000, '2026-10-31')"));
+    check(counter, "the trigger refuses taking out more than is saved",
+          !runSql(c, insertMoney + "(" + bike + ", -5001, '2026-10-31')"));
+    check(counter, "the trigger refuses a saved amount above the largest amount",
+          !runSql(c, insertMoney + "(" + bike + ", 999999999999, '2026-10-31')"));
+    check(counter, "a contribution of zero is refused", !runSql(c, insertMoney + "(" + bike + ", 0, '2026-10-31')"));
+    check(counter, "a contribution for a goal that does not exist is refused",
+          !runSql(c, insertMoney + "(9999, 100, '2026-10-31')"));
+    check(counter, "the saved amount is still exactly 50.00",
+          numberFromSql(c, "SELECT SUM(amount_minor) FROM goal_contributions") == 5000);
+}
+
+// ---- Milestone 5: saved exchange rates -----------------------------------
+
+void testExchangeRateSettings(TestCounter &counter, const QString &folder, const PasswordHasher &quick)
+{
+    TestAccounts accounts("rates", folder, quick);
+    DatabaseManager &database = accounts.database;
+    const QString &c = accounts.connection;
+    signUp(accounts.auth, "Amna Siddiqui", "amna@example.com");
+
+    ExchangeRates none = database.exchangeRates();
+    check(counter, "a new account has no rates yet",
+          none.usdInPkr == 0 && none.eurInPkr == 0 && database.exchangeRatesSavedOn().isEmpty());
+
+    ExchangeRates rates;
+    rates.usdInPkr = 2785000;   // 278.5000
+    rates.eurInPkr = 3021234;   // 302.1234
+    check(counter, "the rates are saved", database.saveExchangeRates(rates), database.lastError());
+    ExchangeRates loaded = database.exchangeRates();
+    check(counter, "and read back exactly", loaded.usdInPkr == 2785000 && loaded.eurInPkr == 3021234);
+    check(counter, "they are stored as readable text with 4 decimal places",
+          textFromSql(c, "SELECT value FROM user_settings WHERE key = 'usd_in_pkr'") == "278.5000");
+    check(counter, "the day they were saved is today",
+          database.exchangeRatesSavedOn() == QDate::currentDate().toString(Qt::ISODate));
+
+    ExchangeRates negative;
+    negative.usdInPkr = -1;
+    check(counter, "a negative rate is refused and the saved rates stay",
+          !database.saveExchangeRates(negative) && database.exchangeRates().usdInPkr == 2785000);
+    ExchangeRates tooLarge;
+    tooLarge.eurInPkr = MAX_RATE + 1;
+    check(counter, "a rate above the largest rate is refused", !database.saveExchangeRates(tooLarge));
+
+    runSql(c, "UPDATE user_settings SET value = '12abc' WHERE key = 'eur_in_pkr'");
+    check(counter, "a saved rate changed by hand into nonsense counts as not entered",
+          database.exchangeRates().eurInPkr == 0 && database.exchangeRates().usdInPkr == 2785000);
+
+    ExchangeRates usdOnly;
+    usdOnly.usdInPkr = 2800000;
+    check(counter, "saving only one rate leaves the other empty",
+          database.saveExchangeRates(usdOnly) && database.exchangeRates().eurInPkr == 0
+              && textFromSql(c, "SELECT value FROM user_settings WHERE key = 'eur_in_pkr'").isEmpty());
+
+    accounts.auth.signOut("signed_out");
+    signUp(accounts.auth, "Bilal Ahmed", "bilal@example.com");
+    check(counter, "Bilal does not see Amna's rates: rates belong to each account",
+          database.exchangeRates().usdInPkr == 0 && database.exchangeRatesSavedOn().isEmpty());
+}
+
 // ---- main --------------------------------------------------------------
 
 int main(int argc, char *argv[])
@@ -1223,7 +1711,7 @@ int main(int argc, char *argv[])
     testNewDatabase(counter, folder);
     testSignUpStartsOnFree(counter, folder, quick);
     testSignUpIsAllOrNothing(counter, folder, quick);
-    std::cout << "---- 4C.1 the upgrade from version 2 to 3 ----\n";
+    std::cout << "---- 4C.1 the upgrade from version 2 (now to version 4) ----\n";
     testUpgradeFromVersion2(counter, folder, quick);
     testUpgradeRollback(counter, folder, quick);
     std::cout << "---- 4C.1 the database's own rules ----\n";
@@ -1242,6 +1730,17 @@ int main(int argc, char *argv[])
     testActivationGuard(counter, folder, quick);
     std::cout << "---- 4C.5 exports and the audit history ----\n";
     testExportsAndAuditHistory(counter, folder, quick);
+    std::cout << "---- Milestone 5: the upgrade from version 3 to 4 ----\n";
+    testUpgradeFromVersion3(counter, folder, quick);
+    testUpgradeFromVersion3Rollback(counter, folder, quick);
+    std::cout << "---- Milestone 5: savings goals and saved exchange rates ----\n";
+    testGoalsNeedPlus(counter, folder, quick);
+    testGoalContributions(counter, folder, quick);
+    testGoalsLeaveBalancesAlone(counter, folder, quick);
+    testGoalsArePrivate(counter, folder, quick);
+    testGoalsAfterDowngrade(counter, folder, quick);
+    testGoalDatabaseRules(counter, folder, quick);
+    testExchangeRateSettings(counter, folder, quick);
 
     std::cout << "-------------------------------------\n";
     std::cout << counter.checksRun << " checks, " << counter.checksFailed << " failed\n";

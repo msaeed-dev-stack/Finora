@@ -4,7 +4,7 @@ Questions your Programming Fundamentals instructor may ask about Finora, with an
 
 Features that are not built yet are marked **Planned — Not Yet Implemented**. Never present them as finished.
 
-Last updated: Milestone 4, Phase 4B, 30 October 2026.
+Last updated: Milestone 5, 31 October 2026.
 
 **How to use this file.** Read the short answer first. Then open the file named under "Where in the code" and find the lines yourself. If you cannot explain a line, study it before the viva.
 
@@ -930,9 +930,88 @@ The full step-by-step script is in `docs/DEMO_MILESTONE3.md`. In short:
 
 ---
 
+## O. Milestone 5: Savings Goals and Exchange Rates
+
+### O1. What did Milestone 5 add?
+- **Short answer:**
+  - **Savings goals** (a Finora Plus feature): a name, a target, an optional target date, money put in and taken out, progress, the amount to save each month, and a complete history.
+  - **Exchange rates that the person enters** for USD and EUR (against PKR), a converter, and an estimate of all balances in one currency.
+  - **Schema version 4:** two new tables and a trigger, with the same verified-backup upgrade as before.
+- **Where in the code:** `src/core/Goal.h`, `src/core/ExchangeRates.h`, `src/database/GoalStore.cpp`, `DatabaseManager::upgradeToVersion4`, `src/ui/GoalsPage.cpp`, `src/ui/GoalDialogs.cpp`, `src/ui/CurrencyPage.cpp`.
+
+### O2. What makes a contribution "safe"?
+- **Short answer:** Four layers.
+  1. **The rules** (`validateContribution` in `Goal.cpp`): the amount is not zero and not too large, the date is real, the note has at most 100 characters, a withdrawal is never more than what is saved, and money put in uses the checked addition `addChecked`, so the total never overflows.
+  2. **One database transaction** (`GoalStore::addContribution`): reading the saved amount, checking the rules and the `INSERT` happen together, so nothing can change the saved amount in between.
+  3. **Ownership:** the goal must belong to the signed-in person. Another person's goal id is simply "not found".
+  4. **A trigger in SQLite** refuses any contribution that would make the saved amount negative or larger than 999,999,999,999, even one written by another program.
+- **Also:** the history is never edited; a mistake is corrected with a new entry. A goal's currency cannot change once money is in it, because the saved amount is in that currency.
+
+### O3. How does Finora work out "save about PKR 25,000.00 a month"?
+- **Short answer:**
+  - `monthsUntil` counts the months from now to the target month, **counting the current month**: `(targetYear x 12 + targetMonth) - (todayYear x 12 + todayMonth) + 1`. From October 2026 to March 2027 that is 6.
+  - The amount per month is the remaining amount divided by the months, **rounded up**: `(remaining + months - 1) / months`. This is ceiling division with whole numbers only.
+- **Why round up:** rounding down could leave the goal a few paisa short. Example: PKR 170,000.00 over 6 months is 28,333.333...; Finora shows PKR 28,333.34.
+
+### O4. Why are rates whole numbers, and how is an amount converted?
+- **Short answer:** A rate is stored with 4 decimal places as a whole number: 278.5 is `2785000` (`RATE_SCALE = 10000`). No `double` is used, so there are no binary rounding errors.
+- **The formula** (`convertAmount`), with every rate measured in PKR (PKR itself is `10000`):
+  - `result = amount x rate(from) / rate(to)`
+  - Rounding half away from zero with whole numbers: `(2 x product + toRate) / (2 x toRate)`. An exact half cent becomes 1 cent, and minus half a cent becomes minus 1 cent.
+- **Examples:**
+  - USD 100.00 at 278.5: `10000 x 2785000 / 10000 = 2,785,000` paisa = PKR 27,850.00.
+  - EUR 10.00 to USD (1 EUR = 301.2 PKR, 1 USD = 278.5 PKR): `1000 x 3012000 / 2785000 = 1081.5...`, rounded once to 1082 = USD 10.82.
+- **Checked multiplication:** before multiplying, `size > ((LLONG_MAX - toRate) / 2) / fromRate` refuses numbers that would not fit in a `long long`. The test divides instead of multiplying, so the test itself cannot overflow.
+
+### O5. Why does Finora not download exchange rates?
+- **Short answer:** Finora works offline and has no network code. A downloaded rate would need an internet service, and the numbers could change without the person noticing. Here the person types the rate from their bank, and the page shows the date it was saved.
+- **Where the rates are kept:** in the person's own settings (`usd_in_pkr`, `eur_in_pkr`, `rates_saved_on`), as readable text such as `278.5000`. Reading them goes through `parseRate` again, so a value edited by hand into nonsense counts as "not entered".
+
+### O6. Does converting change any record?
+- **Short answer:** No. Conversions are only shown, never saved. The records, the dashboard and the budgets still never add currencies together. The Currency page shows its total with "≈" and says it is an estimate.
+
+### O7. Why are goals a Finora Plus feature, and what happens after a downgrade?
+- **Short answer:** The plan table approved in Phase 4C lists "Savings goals" under Finora Plus. `GoalStore` checks `requireFeature(FEATURE_SAVINGS_GOALS)` for every change: a new goal, an edit, money in or out.
+- **After a downgrade:** nothing is deleted. Reading and deleting work on every plan, so the goals and their history stay visible; the page explains that changes need Finora Plus. A test pays for Plus, saves money, lets the plan end, and checks that the goal and its amount are still there.
+
+### O8. What is a trigger?
+- **Short answer:** SQL that SQLite runs by itself before or after an `INSERT`, `UPDATE` or `DELETE`. `goal_saved_amount_stays_valid` runs before every new contribution. If the goal's saved amount would leave the range 0 to 999,999,999,999, it calls `RAISE(ABORT, ...)` and the row is refused.
+- **Why have it:** like the `CHECK` rules, it is a second line of defence behind the C++ rules. A test inserts bad rows with plain SQL and they are refused.
+
+### O9. How was the database upgraded from version 3 to 4?
+- **Short answer:** Exactly like the earlier upgrades (`upgradeSchema`):
+  1. Finora asks first, then saves and verifies a backup copy;
+  2. `upgradeToVersion4` adds two empty tables, an index and the trigger in one transaction, and changes no existing row;
+  3. foreign keys are checked, the event "Schema version 3 to 4" is written to the audit history, and `user_version` becomes 4.
+- **Tested:** every row of the 11 older tables is compared before and after; an upgrade that meets a conflicting table is rolled back and the file stays byte-for-byte the same.
+
+### O10. Does putting money into a goal change my balance?
+- **Short answer:** No. A contribution is not a transaction: it records money the person has set aside, which is still theirs. So the dashboard's balances, this month's income and spending, and the budgets do not change.
+- **Why:** if a contribution were also an expense, the same money would be counted twice: once as spent and once as saved.
+- **On screen:** the Goals page says "Adding or taking out money here does not add a transaction, so your balances and budgets do not change", and the money form says it again. The Currency page says that money in goals is still part of the balances.
+- **Tested:** a billing test compares the transactions table, the PKR balance and the budgets before and after money goes in and out; an interface test compares the dashboard's PKR balance.
+
+### O11. Trace "Add money" from the button to the database.
+1. **The card.** "Add money" on a goal card calls `GoalsPage::openContributionDialog`. Below Finora Plus, `explainIfLocked` explains the plans instead.
+2. **The form.** `ContributionDialog` reads the amount with `parseAmount`, shows "Saved afterwards: ..." and checks `validateContribution` before closing.
+3. **The page.** `GoalsPage::saveContribution` calls `GoalStore::addContribution`.
+4. **The database.** The store checks the plan and the owner, starts a transaction, reads the saved amount, checks the rules again, inserts the row (the trigger checks once more) and commits.
+5. **The screen.** The page reloads the goals, the bar and the amounts change, and a toast says "Money added to the goal."
+
+### O12. What happens if the computer loses power in the middle of an upgrade?
+- **Short answer:** Nothing is lost, and Finora asks again before upgrading.
+  - The upgrade runs inside one transaction. After a power cut, SQLite's journal is still beside the file, and SQLite uses it to undo the unfinished change the next time the file is opened for writing. The file is then exactly as it was last saved.
+  - The read-only check before the question cannot read a file in that state. So `openDatabaseAtStartup` opens it with `setUpgradeAllowed(false)`: SQLite restores it, and `open()` refuses to upgrade. Then the layout can be read, and the person is asked again.
+  - Only "Upgrade and continue" upgrades it, with a new verified backup.
+- **Why `DatabaseManager` checks too:** the rule "never upgrade without the person's agreement" is in the database class itself, so no screen can skip it by mistake.
+- **How it was tested:** the test programs start a second copy of themselves, which begins an upgrade-like transaction and is killed before `COMMIT` with `QProcess::kill()`, like a power cut (`tests/InterruptedUpgrade.h`). The tests then check the refusal, the restored file, the question and both answers.
+- **Where in the code:** `src/ui/DatabaseStartup.cpp`, `DatabaseManager::upgradeSchema`, `tests/finora_db_tests.cpp` (`testInterruptedUpgrade`), `tests/finora_ui_tests.cpp` (`testStartupAfterInterruptedUpgrade`).
+
+---
+
 ## Quick Revision
 
-- **Finora:** offline Windows finance app in C++17, Qt 6 Widgets and SQLite; Milestones 1 to 3 and Phase 4A of Milestone 4 are done.
+- **Finora:** offline Windows finance app in C++17, Qt 6 Widgets and SQLite; Milestones 1 to 5 are done.
 - **Start-up:** fonts and theme, then the single-copy lock, then (for an older file) the upgrade question, then `DatabaseManager::open`, then the window, which applies the saved theme. A failure shows the path and reason, then exits with code 1.
 - **Transactions page:** list, add, edit, delete with confirmation, search, and filters for type, currency, category and period.
 - **Typed amounts:** `parseAmount` reads "1,200.50" as 120050 without `double`; more than two decimals are refused.
@@ -944,7 +1023,10 @@ The full step-by-step script is in `docs/DEMO_MILESTONE3.md`. In short:
 - **Money:** `long long` minor units; 120050 = 1,200.50; per-transaction maximum 999,999,999,999; every total uses `addChecked`; currencies are never added together.
 - **Validation:** `validateTransaction` in C++, plus CHECK and FOREIGN KEY rules in SQLite.
 - **Dates:** YYYY-MM-DD, real calendar dates, leap years via `%`; `daysInMonth` uses `switch`.
-- **Versioning:** `PRAGMA user_version`; 0 creates the tables, 1 is backed up and upgraded after the user agrees, 2 is up to date, higher is refused.
+- **Versioning:** `PRAGMA user_version`; 0 creates the tables; 1, 2 and 3 are backed up and upgraded step by step after the user agrees; 4 is up to date; higher is refused.
+- **Tables added in version 4:** `goals` (one per goal, `user_id NOT NULL`, a unique name per person) and `goal_contributions` (plus or minus amounts), with the trigger `goal_saved_amount_stays_valid`.
+- **Goals:** a Finora Plus feature checked in `GoalStore`; contributions are checked and saved in one transaction; a withdrawal is never more than what is saved; the amount per month is rounded up with `(a + b - 1) / b`; after a downgrade goals stay visible and can be deleted, never deleted automatically.
+- **Exchange rates:** typed by the person, 4 decimal places as whole numbers (`278.5` is `2785000`); `amount x rate(from) / rate(to)`, rounded half away from zero; checked multiplication; records are never converted, and the total on the Currency page is an estimate.
 - **Budgets:** 80% rule `5 x spent >= 4 x limit`; exactly the limit is "Limit reached"; more is "Over budget"; a budget repeats every month.
 - **Themes:** `ThemeColors` tokens, one `finora.qss` template with `{{name}}` colours, icons recoloured from one SVG, Inter and Manrope under the OFL 1.1.
 - **Prepared statements:** placeholders plus `bindValue`, so there is no SQL injection.
@@ -953,5 +1035,6 @@ The full step-by-step script is in `docs/DEMO_MILESTONE3.md`. In short:
 - **Accounts:** passwords stored only as Argon2id hashes (libsodium, MODERATE: 256 MiB, 3 passes) with unique salts; identical messages for a wrong password and an unknown email; waiting times after 3 failures; 10 hashed, single-use recovery codes; sessions end after sign-out, 15 idle minutes or 12 hours.
 - **Isolation:** `user_id IS :owner` in every query; the owner comes only from the `Session`, which only `AuthService` (a friend class) can change.
 - **Plans:** Free $0, Plus $5.99, Pro $12.99, Business $24.99 a month (proposed prices). One table of entitlements (`FEATURES`); checks inside `BudgetStore`, `ReportExporter` and `loadAuditHistory`; Free keeps 3 active budgets and pauses the rest; payments are SIMULATED (no card fields, no keys) and a plan switches on only with a succeeded payment of the same person and plan.
-- **Tests:** 338 core, 220 interface, 157 database, 106 account and 161 billing checks (982 in total), all passing on Windows on 31 October 2026.
-- **Not built yet:** goals, exchange rates, the Reports page, and Business team features (they need Finora Online, a server). Say "planned for Milestone N" or "needs Finora Online".
+- **Tests:** 392 core, 256 interface, 170 database, 106 account and 244 billing checks (1,168 in total), all passing on Windows on 31 October 2026.
+- **Upgrade consent:** `openDatabaseAtStartup` asks before an older file is upgraded; `DatabaseManager` refuses to upgrade without `setUpgradeAllowed(true)`; after a power cut in the middle of an upgrade, SQLite restores the last saved state and Finora asks again.
+- **Not built yet:** the Reports page, and Business team features (they need Finora Online, a server). Say "planned for Milestone 6" or "needs Finora Online".

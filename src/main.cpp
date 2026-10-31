@@ -8,9 +8,7 @@
 // =====================================================================
 #include <QApplication>
 #include <QDir>
-#include <QFileInfo>
 #include <QMessageBox>
-#include <QPushButton>
 
 #include "auth/AuthService.h"
 #include "auth/PasswordHasher.h"
@@ -20,6 +18,7 @@
 #include "database/DatabaseManager.h"
 #include "database/InstanceLock.h"
 #include "ui/AppController.h"
+#include "ui/DatabaseStartup.h"
 #include "ui/Theme.h"
 
 // Explains why Finora cannot start. Finora then closes instead of running
@@ -47,39 +46,6 @@ void showAlreadyRunning()
                              "Look for its window on the taskbar. Only one copy "
                              "of Finora can be open at a time, so that your "
                              "records are always saved safely.");
-}
-
-// What an upgrade from `storedVersion` adds, in words for the question below.
-QString upgradeChangesText(int storedVersion)
-{
-    if (storedVersion == 1) {
-        return "adds budgets, user accounts and subscription plans";
-    }
-    return "adds subscription plans and a billing history";
-}
-
-// Asks before a database from an older Finora is upgraded. The user
-// decides; "Quit" closes Finora and leaves the file exactly as it is.
-bool askToUpgrade(const QString &databasePath, int storedVersion)
-{
-    QString backupFolder = QDir::toNativeSeparators(QFileInfo(databasePath).absolutePath() + "/backups");
-
-    QMessageBox box;
-    box.setIcon(QMessageBox::Question);
-    box.setWindowTitle("Upgrade Finora's data file");
-    box.setText("This version of Finora stores your records in a new layout.");
-    box.setInformativeText(
-        "Your data file uses layout " + QString::number(storedVersion) + ". Finora will upgrade it to layout "
-        + QString::number(CURRENT_SCHEMA_VERSION) + ", which " + upgradeChangesText(storedVersion) + ". "
-        "Every record and every account is kept.\n\n"
-        "Before anything changes, a complete backup copy is saved in:\n" + backupFolder + "\n\n"
-        "If any step fails, the upgrade is undone and your file stays exactly as it is.");
-    QPushButton *upgradeButton = box.addButton("Upgrade and continue", QMessageBox::AcceptRole);
-    box.addButton("Quit without changes", QMessageBox::RejectRole);
-    box.setDefaultButton(upgradeButton);
-    box.exec();
-
-    return box.clickedButton() == upgradeButton;
 }
 
 int main(int argc, char *argv[])
@@ -120,22 +86,20 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    // A file from an older Finora is upgraded only if the user agrees.
-    int storedVersion = DatabaseManager::storedSchemaVersion(databasePath);
-    if (storedVersion >= 1 && storedVersion < CURRENT_SCHEMA_VERSION) {
-        if (!askToUpgrade(databasePath, storedVersion)) {
-            return 0;   // nothing was changed
-        }
-    }
-
     // Who is signed in. It is declared before `database`, so C++ destroys
     // it after the database, which keeps a pointer to it (RAII order).
     Session session;
 
     // Open the database before any window is shown. Its destructor closes
-    // the connection when the program ends (RAII).
+    // the connection when the program ends (RAII). A file from an older
+    // Finora is upgraded only if the user agrees, also after a crash in
+    // the middle of an earlier upgrade (see ui/DatabaseStartup.h).
     DatabaseManager database;
-    if (!database.open(databasePath)) {
+    StartupResult startup = openDatabaseAtStartup(database, databasePath);
+    if (startup == STARTUP_DECLINED) {
+        return 0;   // the user chose "Quit without changes"
+    }
+    if (startup == STARTUP_FAILED) {
         showDatabaseError(databasePath, database.lastError());
         return 1;
     }

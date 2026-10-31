@@ -637,11 +637,30 @@ QFrame#walletDivider {
     max-height: 1px;
 }
 
-/* ---- Budgets ---- */
-QLabel#budgetCategory {
+/* ---- Budgets and savings goals ---- */
+QLabel#budgetCategory,
+QLabel#goalName {
     color: {{text}};
     font-family: "Manrope";
     font-size: 16px;
+    font-weight: 700;
+}
+
+QLabel#goalAdvice {
+    color: {{text}};
+    font-size: 13px;
+}
+
+QLabel#goalsNote {
+    color: {{textMuted}};
+    font-size: 13px;
+}
+
+/* ---- Currency page ---- */
+QLabel#conversionResult {
+    color: {{text}};
+    font-family: "Manrope";
+    font-size: 22px;
     font-weight: 700;
 }
 
