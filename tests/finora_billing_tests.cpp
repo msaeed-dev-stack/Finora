@@ -1677,6 +1677,84 @@ void testExchangeRateSettings(TestCounter &counter, const QString &folder, const
           database.exchangeRates().usdInPkr == 0 && database.exchangeRatesSavedOn().isEmpty());
 }
 
+// ---- Milestone 6: reports --------------------------------------------------
+
+void testReports(TestCounter &counter, const QString &folder, const PasswordHasher &quick)
+{
+    TestAccounts accounts("reports", folder, quick);
+    ReportExporter exporter(accounts.database);
+    const QString &c = accounts.connection;
+
+    // Bilal's record must never appear in Amna's reports.
+    signUp(accounts.auth, "Bilal Ahmed", "bilal@example.com");
+    Transaction bilalRent = makeExpense("Rent", 3000000, "2026-10-10");
+    accounts.database.addTransaction(bilalRent);
+    accounts.auth.signOut("signed_out");
+
+    signUp(accounts.auth, "Amna Siddiqui", "amna@example.com");
+    Transaction salary = makeExpense("Salary", 9000000, "2026-10-01");
+    salary.type = TYPE_INCOME;
+    Transaction food = makeExpense("Food", 250000, "2026-10-31");
+    Transaction formula = makeExpense("=SUM(A1:A9)", 50000, "2026-10-15");   // a formula attack
+    Transaction september = makeExpense("Food", 100000, "2026-09-30");
+    Transaction book = makeExpense("Books", 4599, "2026-10-07");
+    book.currencyCode = "USD";
+    accounts.database.addTransaction(salary);
+    accounts.database.addTransaction(food);
+    accounts.database.addTransaction(formula);
+    accounts.database.addTransaction(september);
+    accounts.database.addTransaction(book);
+
+    ReportRequest request;
+    request.period = "2026-10";
+    request.currencyCode = "PKR";
+    PeriodReport report;
+    QString path = folder + "/amna_report.csv";
+    check(counter, "on Free, ReportExporter itself refuses the report and names Finora Plus",
+          !exporter.buildReport(request, report) && exporter.planBlocked()
+              && exporter.lastError().contains("Finora Plus"),
+          exporter.lastError());
+    check(counter, "and refuses the report file, which is not made",
+          !exporter.exportReportCsv(request, path) && exporter.planBlocked() && !QFile::exists(path));
+
+    setPlanDirectly(c, "amna@example.com", "plus", "active", FAR_FUTURE, FAR_FUTURE);
+    QString transactionsBefore = tableSnapshot(c, "transactions", "1 = 1");
+    check(counter, "on Plus, the October report is built",
+          exporter.buildReport(request, report) && !exporter.planBlocked(), exporter.lastError());
+
+    // The totals must equal SQLite's own sums of the same records.
+    QString amnaOctober = "FROM transactions WHERE user_id = (SELECT id FROM users WHERE email = 'amna@example.com') "
+                          "AND currency_code = 'PKR' AND transaction_date BETWEEN '2026-10-01' AND '2026-10-31'";
+    long long sqlIncome = numberFromSql(c, "SELECT COALESCE(SUM(amount_minor), 0) " + amnaOctober + " AND type = 'income'");
+    long long sqlExpense =
+        numberFromSql(c, "SELECT COALESCE(SUM(amount_minor), 0) " + amnaOctober + " AND type = 'expense'");
+    check(counter, "its totals equal SQLite's own sums of Amna's PKR records in October",
+          report.totals.incomeMinor == sqlIncome && report.totals.expenseMinor == sqlExpense && sqlIncome == 9000000
+              && sqlExpense == 300000);
+    check(counter, "Bilal's rent and Amna's dollars are left out; 30 September is the comparison",
+          report.totals.expenseCount == 2 && report.previousTotals.expenseMinor == 100000);
+    request.currencyCode = "USD";
+    exporter.buildReport(request, report);
+    check(counter, "the USD report holds only the USD book",
+          report.totals.expenseMinor == 4599 && report.totals.incomeMinor == 0 && report.totals.expenseCount == 1);
+
+    request.currencyCode = "PKR";
+    check(counter, "on Plus, the report file is written", exporter.exportReportCsv(request, path), exporter.lastError());
+    QByteArray csv = readFile(path);
+    check(counter, "it starts with the UTF-8 mark and the report line",
+          csv.startsWith("\xEF\xBB\xBF" "Report,Period,Currency,From,To\r\n"));
+    check(counter, "the formula category is made harmless, and Bilal's rent is not in the file",
+          csv.contains("'=SUM(A1:A9)") && !csv.contains("\n=SUM") && !csv.contains(",=SUM")
+              && !csv.contains("30000.00"));
+    check(counter, "making and exporting reports changed no transaction",
+          tableSnapshot(c, "transactions", "1 = 1") == transactionsBefore);
+    check(counter, "the export is written to the audit history",
+          numberFromSql(c, "SELECT COUNT(*) FROM audit_events WHERE event_type = 'report_exported'") == 1);
+
+    accounts.auth.signOut("signed_out");
+    check(counter, "signed out, no report can be made", !exporter.buildReport(request, report));
+}
+
 // ---- main --------------------------------------------------------------
 
 int main(int argc, char *argv[])
@@ -1741,6 +1819,8 @@ int main(int argc, char *argv[])
     testGoalsAfterDowngrade(counter, folder, quick);
     testGoalDatabaseRules(counter, folder, quick);
     testExchangeRateSettings(counter, folder, quick);
+    std::cout << "---- Milestone 6: reports ----\n";
+    testReports(counter, folder, quick);
 
     std::cout << "-------------------------------------\n";
     std::cout << counter.checksRun << " checks, " << counter.checksFailed << " failed\n";

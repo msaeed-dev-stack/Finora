@@ -19,6 +19,7 @@
 #include "core/Money.h"
 #include "core/PasswordPolicy.h"
 #include "core/Plans.h"
+#include "core/Reports.h"
 #include "core/Session.h"
 #include "core/Subscription.h"
 #include "core/Totals.h"
@@ -1160,6 +1161,140 @@ void testExchangeRates(TestCounter &counter)
     checkBool(counter, "an addition below the smallest long long is refused", addSignedChecked(total, -2), false);
 }
 
+// ---- Milestone 6: reports ------------------------------------------------
+
+// Records around the edges of October 2026, in three currencies.
+std::vector<Transaction> reportRecords()
+{
+    return {
+        makeTransaction(TYPE_EXPENSE, 100000, "PKR", "Food", "Last day of September", "2026-09-30"),
+        makeTransaction(TYPE_INCOME, 9000000, "PKR", "Salary", "First day of October", "2026-10-01"),
+        makeTransaction(TYPE_EXPENSE, 150000, "PKR", "Food", "Groceries", "2026-10-12"),
+        makeTransaction(TYPE_EXPENSE, 100000, "PKR", "food", "Lowercase category", "2026-10-31"),
+        makeTransaction(TYPE_EXPENSE, 3000000, "PKR", "Rent", "First day of November", "2026-11-01"),
+        makeTransaction(TYPE_INCOME, 500000, "PKR", "Gifts", "October gift", "2026-10-20"),
+        makeTransaction(TYPE_EXPENSE, 4599, "USD", "Education", "Online course", "2026-10-15"),
+        makeTransaction(TYPE_INCOME, 5000, "EUR", "Gifts", "Gift in euro", "2026-10-20"),
+        makeTransaction(TYPE_INCOME, 7000000, "PKR", "Salary", "Last year", "2025-10-01"),
+    };
+}
+
+void testReports(TestCounter &counter)
+{
+    std::string first;
+    std::string last;
+    checkBool(counter, "October 2026 runs from the 1st to the 31st",
+              periodBounds(REPORT_MONTH, "2026-10", first, last) && first == "2026-10-01" && last == "2026-10-31",
+              true);
+    checkBool(counter, "February 2026 ends on the 28th, February 2024 on the 29th (leap year)",
+              periodBounds(REPORT_MONTH, "2026-02", first, last) && last == "2026-02-28"
+                  && periodBounds(REPORT_MONTH, "2024-02", first, last) && last == "2024-02-29",
+              true);
+    checkBool(counter, "the year 2026 runs from 1 January to 31 December",
+              periodBounds(REPORT_YEAR, "2026", first, last) && first == "2026-01-01" && last == "2026-12-31", true);
+    checkBool(counter, "a month 13, a two-digit year and text are refused",
+              periodBounds(REPORT_MONTH, "2026-13", first, last) || periodBounds(REPORT_YEAR, "26", first, last)
+                  || periodBounds(REPORT_YEAR, "abcd", first, last),
+              false);
+    checkText(counter, "the month before January 2026 is December 2025", previousPeriodOf(REPORT_MONTH, "2026-01"),
+              "2025-12");
+    checkText(counter, "the year before 2026 is 2025", previousPeriodOf(REPORT_YEAR, "2026"), "2025");
+    checkText(counter, "there is no year before 1900", previousPeriodOf(REPORT_YEAR, "1900"), "");
+
+    std::vector<Transaction> records = reportRecords();
+    PeriodTotals october = totalsBetween(records, "PKR", "2026-10-01", "2026-10-31");
+    checkAmount(counter, "October income: the first day counts, other months do not", october.incomeMinor, 9500000);
+    checkAmount(counter, "October expenses: the last day counts, 30 September and 1 November do not",
+                october.expenseMinor, 250000);
+    checkBool(counter, "2 income and 2 expense transactions are counted",
+              october.incomeCount == 2 && october.expenseCount == 2, true);
+    checkAmount(counter, "net = income minus expenses = PKR 92,500.00", netOf(october), 9250000);
+    PeriodTotals usd = totalsBetween(records, "USD", "2026-10-01", "2026-10-31");
+    checkBool(counter, "the USD total holds only the USD expense: currencies are never mixed",
+              usd.expenseMinor == 4599 && usd.incomeMinor == 0 && usd.expenseCount == 1, true);
+    PeriodTotals empty = totalsBetween(records, "PKR", "2026-03-01", "2026-03-31");
+    checkBool(counter, "an empty month gives zero totals and zero counts",
+              empty.incomeMinor == 0 && empty.expenseMinor == 0 && empty.incomeCount == 0 && !empty.overflow, true);
+    checkAmount(counter, "the net can be negative: September 2026 is PKR -1,000.00",
+                netOf(totalsBetween(records, "PKR", "2026-09-01", "2026-09-30")), -100000);
+
+    bool overflow = false;
+    std::vector<ReportCategory> both = categoriesBetween(records, "PKR", "", "2026-10-01", "2026-10-31", overflow);
+    checkBool(counter, "categories of both types: income first, the largest first; Food and food are one",
+              both.size() == 3 && both[0].category == "Salary" && both[1].category == "Gifts"
+                  && both[2].category == "Food" && both[2].type == TYPE_EXPENSE && both[2].amountMinor == 250000
+                  && both[2].count == 2 && !overflow,
+              true);
+    std::vector<ReportCategory> expenses =
+        categoriesBetween(records, "PKR", TYPE_EXPENSE, "2026-10-01", "2026-10-31", overflow);
+    checkBool(counter, "the type filter keeps only the expense categories",
+              expenses.size() == 1 && expenses[0].category == "Food", true);
+
+    ReportRequest request;
+    request.period = "2026-10";
+    request.currencyCode = "PKR";
+    PeriodReport report;
+    checkBool(counter, "a month report is built", buildPeriodReport(records, request, report), true);
+    checkBool(counter, "it compares October with September 2026",
+              report.previousPeriod == "2026-09" && report.previousTotals.expenseMinor == 100000
+                  && report.totals.incomeMinor == 9500000,
+              true);
+    checkBool(counter, "and shows the 6 months May to October, with November's rent left out",
+              report.months.size() == 6 && report.months[0].month == "2026-05" && report.months[5].month == "2026-10"
+                  && report.months[5].expenseMinor == 250000 && report.months[4].expenseMinor == 100000,
+              true);
+
+    request.kind = REPORT_YEAR;
+    request.period = "2026";
+    buildPeriodReport(records, request, report);
+    checkBool(counter, "a year report covers the whole year, including 1 November",
+              report.totals.incomeMinor == 9500000 && report.totals.expenseMinor == 3350000, true);
+    checkBool(counter, "it compares 2026 with 2025 and lists the 12 months January to December",
+              report.previousPeriod == "2025" && report.previousTotals.incomeMinor == 7000000
+                  && report.months.size() == 12 && report.months[0].month == "2026-01"
+                  && report.months[11].month == "2026-12" && report.months[10].expenseMinor == 3000000,
+              true);
+
+    ReportRequest wrong = request;
+    wrong.currencyCode = "GBP";
+    checkBool(counter, "an unknown currency is refused", buildPeriodReport(records, wrong, report), false);
+    wrong = request;
+    wrong.type = "transfer";
+    checkBool(counter, "an unknown type is refused", buildPeriodReport(records, wrong, report), false);
+    std::vector<Transaction> none;
+    request.kind = REPORT_MONTH;
+    request.period = "2026-10";
+    checkBool(counter, "a report without any transactions is built, with zeros and no categories",
+              buildPeriodReport(none, request, report) && report.totals.incomeMinor == 0
+                  && report.categories.empty() && report.months.size() == 6,
+              true);
+    checkBool(counter, "building a report never changes the transactions",
+              records.size() == 9 && records[3].category == "food" && records[0].amountMinor == 100000, true);
+
+    // The CSV text of a report.
+    std::vector<Transaction> tricky = {
+        makeTransaction(TYPE_EXPENSE, 120050, "PKR", "Ali's \"Bhai\" shop, Saddar", "Quotes and a comma", "2026-10-05"),
+        makeTransaction(TYPE_EXPENSE, 5000, "PKR", "=HYPERLINK(\"http://evil.example\")", "Formula", "2026-10-06"),
+        makeTransaction(TYPE_EXPENSE, 2500, "PKR", "Line\nbreak", "New line", "2026-10-07"),
+    };
+    buildPeriodReport(tricky, request, report);
+    std::string csv = reportCsv(report);
+    checkBool(counter, "the report CSV starts with what it covers",
+              csv.find("Report,Period,Currency,From,To\r\nMonth,2026-10,PKR,2026-10-01,2026-10-31\r\n") == 0, true);
+    checkBool(counter, "a category with quotes and a comma is quoted and its quotes doubled",
+              csv.find("\"Ali's \"\"Bhai\"\" shop, Saddar\",Expense,1200.50,1") != std::string::npos, true);
+    checkBool(counter, "a category that looks like a formula gets a ' in front",
+              csv.find("\"'=HYPERLINK(\"\"http://evil.example\"\")\"") != std::string::npos
+                  && csv.find(",=HYPERLINK") == std::string::npos,
+              true);
+    checkBool(counter, "a line break inside a category stays inside quotes", csv.find("\"Line\nbreak\"") != std::string::npos,
+              true);
+    checkBool(counter, "a negative net is written as a plain number", csv.find("Net,-1275.50,0.00") != std::string::npos,
+              true);
+    checkBool(counter, "every line ends with \\r\\n",
+              csv.size() >= 2 && csv.substr(csv.size() - 2) == "\r\n", true);
+}
+
 int main()
 {
     TestCounter counter;
@@ -1199,6 +1334,9 @@ int main()
     std::cout << "---- Milestone 5: savings goals and exchange rates ----\n";
     testGoals(counter);
     testExchangeRates(counter);
+
+    std::cout << "---- Milestone 6: reports ----\n";
+    testReports(counter);
 
     std::cout << "-----------------\n";
     std::cout << counter.checksRun << " checks, " << counter.checksFailed << " failed\n";

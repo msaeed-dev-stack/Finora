@@ -10,7 +10,7 @@ Two things to say clearly:
 
 1. Run `build.bat` and check that the last lines say **100% tests passed, 0 tests failed out of 5**.
 2. Close every Finora window. Only one copy can run at a time.
-3. Start Finora as `Finora.exe --billing-demo` from the `build\release` folder, so that the Subscription page offers "Demo: end this period now".
+3. Start Finora as `Finora.exe --billing-demo --database "%USERPROFILE%\Documents\FinoraDemo\finora.db"` from the `build\release` folder. The Subscription page then offers "Demo: end this period now", and a separate demonstration file is used instead of your real data (see `docs/DEMO_FINAL.md`).
 4. Sign in with a demonstration account on **Finora Free** that has a few transactions in PKR and at least one in USD.
 5. Open `src/core/Goal.cpp`, `src/core/ExchangeRates.cpp`, `src/database/GoalStore.cpp` and `DatabaseManager::upgradeToVersion4` in your editor, ready to show.
 

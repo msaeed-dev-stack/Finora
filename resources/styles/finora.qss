@@ -656,8 +656,9 @@ QLabel#goalsNote {
     font-size: 13px;
 }
 
-/* ---- Currency page ---- */
-QLabel#conversionResult {
+/* ---- Currency and Reports pages ---- */
+QLabel#conversionResult,
+QLabel#reportValue {
     color: {{text}};
     font-family: "Manrope";
     font-size: 22px;

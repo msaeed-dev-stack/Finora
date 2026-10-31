@@ -2,7 +2,7 @@
 
 This document explains how Finora is organised and how its algorithms work. It describes only what exists in the code. Anything not built yet is marked **Planned — Not Yet Implemented**.
 
-Last updated: Milestone 5, 31 October 2026.
+Last updated: Milestones 6 and 7, 31 October 2026.
 
 ## 1. Architecture
 
@@ -10,12 +10,12 @@ Finora is split into layers. Each layer has one job.
 
 | Layer | Folder | Job | Uses Qt? | Status |
 |---|---|---|---|---|
-| Core logic | `src/core` | Rules in plain C++: greeting, transaction validation, dates, currencies, reading and writing amounts, search and filters, checked totals per currency, budget rules, password and account rules, the Session, plans and entitlements, the subscription lifecycle, CSV text, savings goal rules and progress, exchange rates and conversion | No | Done for Milestones 1 to 5 |
-| Database | `src/database` | Open the SQLite file, create and safely upgrade tables, backups; transactions, settings, budgets, accounts, subscriptions and payments, savings goals, the saved exchange rates; the single-copy lock | Yes, Qt SQL | Done for Milestones 2 to 5 |
+| Core logic | `src/core` | Rules in plain C++: greeting, transaction validation, dates, currencies, reading and writing amounts, search and filters, checked totals per currency, budget rules, password and account rules, the Session, plans and entitlements, the subscription lifecycle, CSV text, savings goal rules and progress, exchange rates and conversion, reports by period, category, type and currency | No | Done for Milestones 1 to 6 |
+| Database | `src/database` | Open the SQLite file, create and safely upgrade tables, backups; transactions, settings, budgets, accounts, subscriptions and payments, savings goals, the saved exchange rates; the single-copy lock | Yes, Qt SQL | Done for Milestones 2 to 6 |
 | Accounts | `src/auth` | Argon2id password hashing (libsodium) and the account rules: sign-up, sign-in, sessions, recovery | Yes, Qt Core | Done in Phase 4B |
 | Billing | `src/billing` | The payment gateway interface, the simulated gateway and the subscription lifecycle | Yes, Qt Core | Done in Phase 4C |
-| Reports | `src/reports` | The CSV export and the monthly PDF summary | Yes, Qt GUI | Done in Phase 4C |
-| User interface | `src/ui` | Windows, sidebar, light and dark theme, the pages, forms, dialogs, reusable components | Yes, Qt Widgets and Qt Svg | Done for Milestones 1 to 5 |
+| Reports | `src/reports` | The CSV export, the monthly PDF summary, and the reports of a month or a year (Milestone 6) | Yes, Qt GUI | Done in Phase 4C and Milestone 6 |
+| User interface | `src/ui` | Windows, sidebar, light and dark theme, the pages, forms, dialogs, reusable components | Yes, Qt Widgets and Qt Svg | Done for Milestones 1 to 6 |
 | Tests | `tests` | Check the core, the windows, the database, the accounts and the subscriptions automatically | Core tests no; the others yes | 5 test programs |
 
 ```mermaid
@@ -1287,3 +1287,98 @@ Separate checks for this milestone, outside the test programs, are recorded in `
 - **Only USD and EUR need rates,** both measured in PKR. Other currencies are not supported.
 - **Goals have no automatic saving.** Money is put in by hand; there are no recurring contributions (recurring transactions are planned for Finora Plus).
 - **A goal's currency is fixed** once money is in it. To save in another currency, the person creates another goal.
+
+## 14. Milestone 6: reports
+
+The roadmap asked for summaries by period, by category, by transaction type and by currency, monthly and yearly comparisons, and a CSV export that handles commas, quotes, line breaks and formulas. Some of this already existed and was **reused, not rebuilt**:
+
+| Already there | From | Reused for |
+|---|---|---|
+| `csvField` and `plainAmount` (quoting, doubled quotes, line breaks, formula protection) | Phase 4C, `CsvExport` | The report's CSV file |
+| `monthlyFlow` (income and expenses per month, checked) | Phase 4A, `Totals` | The month-by-month table |
+| `addChecked`, `isValidMonth`, `shiftMonth`, `daysInMonth`, `toLowerText` | Milestones 2 to 4 | Period bounds, totals, categories |
+| `requireFeature` and the `FEATURES` table | Phase 4C | "Monthly and yearly reports" (Finora Plus) |
+| The transactions CSV (Plus) and the monthly PDF (Pro) | Phase 4C | Left unchanged |
+
+### 14.1 Who does what
+
+| Part | Layer | Job |
+|---|---|---|
+| `Reports` | core | `periodBounds`, `previousPeriodOf`, `totalsBetween`, `categoriesBetween`, `buildPeriodReport`, `reportCsv`. Plain C++, tested directly |
+| `ReportExporter::buildReport`, `exportReportCsv` | reports | **The plan check** (`requireFeature(FEATURE_REPORTS)`, and `FEATURE_CSV_EXPORT` for the file) before any record is read; the signed-in person's own transactions only |
+| `ReportsPage` | ui | The choices (month or year, which one, currency, category type), three summary cards, the categories table and the month-by-month table |
+
+### 14.2 The rules
+
+```text
+periodBounds(MONTH, "2026-02")  ->  2026-02-01 .. 2026-02-28   (daysInMonth: 29 in a leap year)
+periodBounds(YEAR, "2026")      ->  2026-01-01 .. 2026-12-31
+previousPeriodOf(MONTH, "2026-01") -> "2025-12";  previousPeriodOf(YEAR, "2026") -> "2025"
+
+totalsBetween(transactions, currency, firstDay, lastDay):
+    FOR each transaction
+        IF its currency differs OR date < firstDay OR date > lastDay THEN skip   // both days included
+        add its amount to income or to expenses with addChecked, and count it
+
+buildPeriodReport(transactions, request):
+    refuse an unknown currency, an unknown type or an invalid period
+    totals         = totalsBetween(the period)
+    previousTotals = totalsBetween(the period before)
+    categories     = categoriesBetween(the period, the chosen type)   // income first, the largest first
+    months         = monthlyFlow(6 months up to the month)  or  monthlyFlow(the 12 months of the year)
+```
+
+- **One currency at a time.** Every function takes one currency code; PKR, USD and EUR are never added together. The page names the other currencies that have records in the same period ("Also in October 2026: USD (1 transaction)") without adding them.
+- **Date boundaries.** Dates are `YYYY-MM-DD` text, so `<` and `>` compare them correctly. The first and the last day of the period are included; the day before and the day after are not. The tests put records exactly on those days.
+- **Categories.** "Food" and "food" of the same type are one category. Each category shows its amount, its share of all income or all expenses of the period (`percentUsed`, whole percent, rounded down) and its number of transactions.
+- **Comparisons.** The income and expense cards say how much more or less than the period before ("PKR 1,500.00 more than September 2026"). Both totals are 0 or more, so the difference cannot overflow. The month-by-month table shows 6 months for a month report and the 12 months of the year for a year report.
+- **Empty periods** give zeros and a sentence such as "No income or expenses in PKR in March 2026", never an error.
+- **Read-only.** Reports only read the transactions. A test compares the transactions table before and after making and exporting reports.
+
+### 14.3 The report as a CSV file
+
+```text
+Report,Period,Currency,From,To
+Month,2026-10,PKR,2026-10-01,2026-10-31
+
+Summary,This period,Previous period 2026-09
+Income,90000.00,0.00
+Expenses,2500.00,1000.00
+Net,87500.00,-1000.00
+Transactions,2,1
+
+Category,Type,Amount,Transactions
+Salary,Income,90000.00,1
+Food,Expense,2500.00,1
+
+Month,Income,Expenses,Net
+2026-05,0.00,0.00,0.00
+...
+```
+
+- Category names come from the person, so they always go through `csvField`: a comma, a quote or a line break puts the name in quotes (inner quotes doubled), and a name that starts like a formula (`=`, `+`, `-`, `@`) gets a `'` in front.
+- Amounts are plain numbers (`-1000.00` for a negative net); every line ends with `\r\n`; the file starts with the UTF-8 mark and is written with `QSaveFile`, so a failure never leaves half a file. The export is written to the audit history (`report_exported`).
+
+### 14.4 Plans
+
+"Monthly and yearly reports" is part of Finora Plus (the plan table of section 12.3). `ReportExporter` checks it before it reads a record, so no screen can show or save a report on Finora Free: the page shows a banner with "See plans", and "Export report" explains the plans. The tests call `ReportExporter` directly and it refuses on Free.
+
+### 14.5 Tests
+
+| Test program | What it checks for Milestone 6 |
+|---|---|
+| `finora_tests` | Period bounds (31-day months, February in normal and leap years, whole years, invalid input), the period before, totals with records on the first and last day and just outside, currency separation, empty periods, negative nets, categories of one or both types with "Food" and "food" merged, month and year reports with their comparisons, invalid requests, read-only use, and the CSV text with commas, quotes, line breaks, formulas and negative amounts |
+| `finora_billing_tests` | Refused on Free (report and file); on Plus the totals equal SQLite's own `SUM` of the same records; another person's record never appears; the USD report is separate; the CSV file starts with the UTF-8 mark and neutralises a formula category; no transaction changes; the audit line is written; nothing works after signing out |
+| `finora_ui_tests` | The locked page on Free and its explanation; on Plus the October report, the comparison sentence, the categories and their shares, the type filter, the USD report, the year view with 12 months, an empty month, and the export with its toast |
+
+### 14.6 Limitations of the reports
+
+- One currency per report. A converted total of all currencies exists only as the estimate on the Currency page.
+- Periods are whole months and whole years; there is no custom date range.
+- The report file is CSV. The PDF summary (Finora Pro) is still the monthly summary of Phase 4C.
+
+## 15. Milestone 7: final testing and delivery
+
+- **Clean builds** of debug and release with no warnings, every test program in both configurations, CTest, the DLL check of the packaged program, and the release test programs run with only Windows on the PATH. The results are in `docs/MILESTONE6_7_PROGRESS.md`.
+- **`Finora.exe --database <file>`** opens another data file instead of `%LOCALAPPDATA%\Finora\finora.db`. It exists so the packaged program can be started and demonstrated without touching the person's real data; the lock file is then made next to that other file.
+- **The real data file** was never opened by the tests; its SHA-256 was compared before and after.

@@ -115,7 +115,7 @@ const FeatureInfo FEATURES[FEATURE_COUNT] = {
     {"Unlimited active budgets",             PLAN_PLUS,     FEATURE_AVAILABLE},
     {"Savings goals",                        PLAN_PLUS,     FEATURE_AVAILABLE},
     {"Advanced filters",                     PLAN_PLUS,     FEATURE_PLANNED},
-    {"Monthly and yearly reports",           PLAN_PLUS,     FEATURE_PLANNED},
+    {"Monthly and yearly reports",           PLAN_PLUS,     FEATURE_AVAILABLE},
     {"CSV exports",                          PLAN_PLUS,     FEATURE_AVAILABLE},
     {"Recurring transactions",               PLAN_PLUS,     FEATURE_PLANNED},
     {"Better financial insights",            PLAN_PLUS,     FEATURE_PLANNED},

@@ -8,6 +8,7 @@
 // =====================================================================
 #include <QApplication>
 #include <QDir>
+#include <QFileInfo>
 #include <QMessageBox>
 
 #include "auth/AuthService.h"
@@ -71,6 +72,12 @@ int main(int argc, char *argv[])
     }
 
     QString databasePath = DatabaseManager::defaultDatabasePath();
+    // "Finora.exe --database <file>" uses another data file, for example a
+    // demonstration copy, so the person's real data file is never touched.
+    int optionAt = app.arguments().indexOf("--database");
+    if (optionAt > 0 && optionAt + 1 < app.arguments().size()) {
+        databasePath = QFileInfo(app.arguments().at(optionAt + 1)).absoluteFilePath();
+    }
 
     // Only one copy of Finora may use the database. The lock is taken
     // before the database is opened, and `instanceLock` is declared first,

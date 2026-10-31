@@ -63,7 +63,9 @@
 #include "ui/GoalDialogs.h"
 #include "ui/GoalsPage.h"
 #include "ui/MainWindow.h"
+#include "ui/ReportsPage.h"
 #include "ui/SettingsPage.h"
+#include "ui/components/MonthSwitcher.h"
 #include "ui/SubscriptionPage.h"
 #include "ui/Theme.h"
 #include "ui/TransactionDialog.h"
@@ -1769,10 +1771,15 @@ void testGoalsAndCurrencyPages(TestCounter &counter, QApplication &app, const QS
         check(counter, "the Goals and Currency pages exist", false);
         return;
     }
-    check(counter, "Goals and Currency are real pages now; only Reports still says 'coming soon'",
-          !navGroup->button(PAGE_GOALS)->accessibleName().contains("coming soon")
-              && !navGroup->button(PAGE_CURRENCY)->accessibleName().contains("coming soon")
-              && navGroup->button(PAGE_REPORTS)->accessibleName().contains("coming soon"));
+    // Since Milestone 6 every page is real: no sidebar button says "coming soon".
+    int comingSoon = 0;
+    for (int pageNumber = 0; pageNumber < PAGE_COUNT; pageNumber++) {
+        if (navGroup->button(pageNumber)->accessibleName().contains("coming soon")) {
+            comingSoon++;
+        }
+    }
+    check(counter, "Goals, Currency and Reports are real pages: no sidebar button says 'coming soon'",
+          comingSoon == 0);
 
     // ---- Goals on Finora Free ----
     navGroup->button(PAGE_GOALS)->click();
@@ -1960,6 +1967,142 @@ void testGoalsAndCurrencyPages(TestCounter &counter, QApplication &app, const QS
     }
     check(counter, "no record was converted or changed: still PKR 100,000.00, USD 10.00 and EUR 50.00",
           records.size() == 3 && pkr == 1 && usd == 1 && eur == 1);
+    auth.signOut("signed_out");
+}
+
+// ---- Milestone 6: the Reports page ---------------------------------------
+
+// The table of the Reports page with this many columns (categories 5, months 4).
+QTableWidget *reportTable(QWidget *page, int columns)
+{
+    QList<QTableWidget *> tables = page->findChildren<QTableWidget *>();
+    for (int i = 0; i < tables.size(); i++) {
+        if (tables[i]->columnCount() == columns) {
+            return tables[i];
+        }
+    }
+    return nullptr;
+}
+
+QString cellText(QTableWidget *table, int row, int column)
+{
+    if (table == nullptr || table->item(row, column) == nullptr) {
+        return QString();
+    }
+    return table->item(row, column)->text();
+}
+
+void testReportsPage(TestCounter &counter, QApplication &app, const QString &folder, const QString &screenshotFolder)
+{
+    Session session;
+    DatabaseManager database("ui_reports");
+    database.open(folder + "/ui_reports.db");
+    database.attachSession(session);
+    PasswordHasher quick(1, 8192);
+    AuthService auth(database, session, quick, quick);
+    std::vector<std::string> codes;
+    std::string password = "Correct Horse 9!";
+    auth.signUp("Amna Siddiqui", "amna@example.com", password, codes);
+    SimulatedPaymentGateway gateway;
+    SubscriptionService service(database, gateway);
+    std::string reference;
+
+    // October 2026 in PKR, the last day of September, and one USD record.
+    Transaction salary = makeTransaction(TYPE_INCOME, 9000000, "PKR", "Salary", "October salary", QDate(2026, 10, 1));
+    Transaction food = makeTransaction(TYPE_EXPENSE, 250000, "PKR", "Food", "Groceries", QDate(2026, 10, 31));
+    Transaction september = makeTransaction(TYPE_EXPENSE, 100000, "PKR", "Food", "September", QDate(2026, 9, 30));
+    Transaction book = makeTransaction(TYPE_EXPENSE, 4599, "USD", "Education", "Online book", QDate(2026, 10, 15));
+    database.addTransaction(salary);
+    database.addTransaction(food);
+    database.addTransaction(september);
+    database.addTransaction(book);
+
+    MainWindow window(database, &auth, &service);
+    window.resize(1280, 800);
+    window.show();
+    app.processEvents();
+    QButtonGroup *navGroup = window.findChild<QButtonGroup *>("navButtonGroup");
+    ReportsPage *reports = window.findChild<ReportsPage *>("reportsPage");
+    if (navGroup == nullptr || reports == nullptr) {
+        check(counter, "the Reports page exists", false);
+        return;
+    }
+    QPushButton *exportButton = findButton(reports, "Export report");
+    MonthSwitcher *switcher = reports->findChild<MonthSwitcher *>();
+    QComboBox *kindBox = reports->findChild<QComboBox *>("reportKindBox");
+    QComboBox *yearBox = reports->findChild<QComboBox *>("reportYearBox");
+    QComboBox *currencyBox = reports->findChild<QComboBox *>("reportCurrencyBox");
+    QComboBox *typeBox = reports->findChild<QComboBox *>("reportTypeBox");
+
+    // ---- Finora Free ----
+    navGroup->button(PAGE_REPORTS)->click();
+    check(counter, "on Free, the Reports page is locked and explains Finora Plus",
+          reports->isLocked() && someLabelContains(reports, "\"Monthly and yearly reports\" is part of Finora Plus")
+              && exportButton != nullptr && !exportButton->icon().isNull());
+    saveWindowScreenshot(window, screenshotFolder, "m6_reports_free");
+    lastMessageText.clear();
+    QTimer::singleShot(0, answerNotNow);
+    exportButton->click();
+    check(counter, "'Export report' on Free explains the plans instead of asking for a file",
+          lastMessageText == "Reports" && lastMessageDetails.contains("Finora Plus"));
+
+    // ---- Finora Plus ----
+    service.payForPlan(PLAN_PLUS, false, reference);
+    navGroup->button(PAGE_REPORTS)->click();   // shown again: the report is made with the new plan
+    switcher->setMonth("2026-10");
+    app.processEvents();
+    const PeriodReport &shown = reports->shownReport();
+    check(counter, "on Plus, October 2026 in PKR shows the income, the expenses and the change from September",
+          !reports->isLocked() && shown.totals.incomeMinor == 9000000 && shown.totals.expenseMinor == 250000
+              && shown.previousTotals.expenseMinor == 100000 && someLabelContains(reports, "PKR 90,000.00")
+              && someLabelContains(reports, "PKR 1,500.00 more than September 2026") && exportButton->icon().isNull());
+    check(counter, "the USD record is never added to PKR; it is only named",
+          shown.totals.expenseCount == 1 && someLabelContains(reports, "Also in October 2026: USD (1 transaction)"));
+    QTableWidget *categories = reportTable(reports, 5);
+    check(counter, "the categories: Salary (income) and Food (expense), each 100% of its type",
+          categories != nullptr && categories->rowCount() == 2 && cellText(categories, 0, 0) == "Salary"
+              && cellText(categories, 0, 1) == "Income" && cellText(categories, 0, 3) == "100%"
+              && cellText(categories, 1, 0) == "Food" && cellText(categories, 1, 2) == "PKR 2,500.00");
+    typeBox->setCurrentIndex(typeBox->findData(QString::fromStdString(TYPE_EXPENSE)));
+    check(counter, "'Expenses only' lists only the expense categories",
+          categories->rowCount() == 1 && cellText(categories, 0, 0) == "Food");
+    typeBox->setCurrentIndex(typeBox->findData(""));
+    saveWindowScreenshot(window, screenshotFolder, "m6_reports_month");
+
+    currencyBox->setCurrentIndex(currencyBox->findData("USD"));
+    check(counter, "the USD report is separate: USD 45.99 of expenses, and PKR is only named",
+          reports->shownReport().totals.expenseMinor == 4599 && reports->shownReport().totals.incomeMinor == 0
+              && someLabelContains(reports, "Also in October 2026: PKR (2 transactions)"));
+    currencyBox->setCurrentIndex(currencyBox->findData("PKR"));
+
+    kindBox->setCurrentIndex(kindBox->findData(REPORT_YEAR));
+    yearBox->setCurrentIndex(yearBox->findData("2026"));
+    QTableWidget *months = reportTable(reports, 4);
+    check(counter, "the year 2026: both PKR months, compared with 2025, month by month for 12 months",
+          reports->shownReport().totals.expenseMinor == 350000 && reports->shownReport().previousPeriod == "2025"
+              && months != nullptr && months->rowCount() == 12 && cellText(months, 9, 0) == "Oct 2026"
+              && cellText(months, 9, 3) == "PKR 87,500.00" && someLabelContains(reports, "Month by month in 2026"));
+    saveWindowScreenshot(window, screenshotFolder, "m6_reports_year");
+    if (!screenshotFolder.isEmpty()) {
+        window.setDarkTheme(true);   // only for the pictures; the checks run in the light theme
+        saveWindowScreenshot(window, screenshotFolder, "m6_reports_year_dark");
+        window.setDarkTheme(false);
+    }
+
+    kindBox->setCurrentIndex(kindBox->findData(REPORT_MONTH));
+    switcher->setMonth("2026-03");
+    check(counter, "an empty month shows zeros and says that nothing was recorded",
+          reports->shownReport().totals.incomeMinor == 0 && reports->shownReport().totals.expenseMinor == 0
+              && someLabelContains(reports, "No income or expenses in PKR in March 2026."));
+    switcher->setMonth("2026-10");
+
+    QString path = folder + "/ui_report.csv";
+    check(counter, "'Export report' writes the report as a CSV file and says so",
+          reports->exportReportTo(path) && fileStart(path, 3) == QByteArray("\xEF\xBB\xBF")
+              && toastText(&window) == "Report exported to ui_report.csv.");
+    std::vector<Transaction> records;
+    database.loadTransactions(records);
+    check(counter, "making reports changed no record", records.size() == 4);
     auth.signOut("signed_out");
 }
 
@@ -2159,6 +2302,9 @@ int main(int argc, char *argv[])
 
     std::cout << "---- Milestone 5: the Goals and Currency pages ----\n";
     testGoalsAndCurrencyPages(counter, app, temporaryFolder.path(), screenshotFolder);
+
+    std::cout << "---- Milestone 6: the Reports page ----\n";
+    testReportsPage(counter, app, temporaryFolder.path(), screenshotFolder);
 
     std::cout << "---- Milestone 5: the start-up question after an interrupted upgrade ----\n";
     testStartupAfterInterruptedUpgrade(counter, app, temporaryFolder.path());

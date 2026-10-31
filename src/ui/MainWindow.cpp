@@ -14,6 +14,7 @@
 #include "DashboardPage.h"
 #include "GoalsPage.h"
 #include "PlaceholderPage.h"
+#include "ReportsPage.h"
 #include "Theme.h"
 #include "TransactionsPage.h"
 #include "UiHelpers.h"
@@ -21,8 +22,8 @@
 #include "database/SubscriptionStore.h"
 
 // ---- Text for the pages that are not built yet ----------------------
-// One structure per page, in page-number order (see Sidebar.h). Only
-// the planned Reports page still uses these texts; the other pages are real.
+// One structure per page, in page-number order (see Sidebar.h). Since
+// Milestone 6 every page is real, so PlaceholderPage is only a fallback.
 struct PageInfo {
     const char *title;            // large heading at the top of the page
     const char *subtitle;         // grey line under the heading
@@ -245,6 +246,12 @@ void MainWindow::createPages()
             page = goalsPage;
             break;
         }
+        case PAGE_REPORTS: {
+            ReportsPage *reportsPage = new ReportsPage(database, pageStack);
+            connect(reportsPage, &ReportsPage::openPageRequested, this, &MainWindow::showPage);
+            page = reportsPage;
+            break;
+        }
         case PAGE_CURRENCY:
             page = new CurrencyPage(database, pageStack);
             break;
@@ -262,7 +269,7 @@ void MainWindow::createPages()
             page = settingsPage;
             break;
         default:
-            // Reports is planned: an honest "coming soon" page.
+            // No page is planned any more; an honest "coming soon" page remains the fallback.
             page = new PlaceholderPage(PAGE_INFO[pageNumber].title, PAGE_INFO[pageNumber].subtitle,
                                        PAGE_INFO[pageNumber].iconName, PAGE_INFO[pageNumber].milestone,
                                        PAGE_INFO[pageNumber].plannedFeatures, pageStack);

@@ -27,7 +27,7 @@ const NavItem NAV_ITEMS[PAGE_COUNT] = {
     {"Transactions", "transactions", false},
     {"Budgets",      "budgets",      false},
     {"Goals",        "goals",        false},
-    {"Reports",      "reports",      true},
+    {"Reports",      "reports",      false},
     {"Currency",     "currency",     false},
     {"Subscription", "subscription", false},
     {"Settings",     "settings",     false}

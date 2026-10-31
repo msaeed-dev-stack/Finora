@@ -2,7 +2,7 @@
 
 Where each C++ concept appears in Finora's real source code. Only concepts that exist in the code are listed in the first table. Concepts that are not used yet are listed separately, with the milestone where they will appear naturally.
 
-Last updated: Milestone 5, 31 October 2026.
+Last updated: Milestones 6 and 7, 31 October 2026.
 
 ## Concepts used in the code
 
@@ -109,6 +109,9 @@ Last updated: Milestone 5, 31 October 2026.
 | Constructor overloading (more) | `GoalDialog()` for a new goal, `GoalDialog(goalToEdit)` for an existing one; `ContributionDialog(goal, takeOut)` serves both "Add money" and "Take out" | `src/ui/GoalDialogs.cpp` | One class, two ways to start | "The second constructor fills the form from the goal and fixes the currency once money is saved." |
 | Composition (more) | `GoalsPage` has a `GoalStore` member, built from the shared `DatabaseManager` | `GoalsPage.h` | The page needs the goal SQL, but must not contain it | "The page asks its `GoalStore`; only the store knows SQL." |
 | An enum as a function result | `enum StartupResult { STARTUP_OPENED, STARTUP_DECLINED, STARTUP_FAILED }` | `openDatabaseAtStartup` in `src/ui/DatabaseStartup.h` | Three outcomes need three names; a `bool` could only say two | "`main()` returns 0 for DECLINED and 1 for FAILED, so Windows knows which one happened." |
+| Sorting with a comparison function | `std::sort(lines.begin(), lines.end(), reportCategoryOrder)`: income before expenses, then the larger amount, then A to Z | `src/core/Reports.cpp` | A report lists categories in a fixed, meaningful order | "`std::sort` asks my function which of two lines comes first." |
+| A struct that holds vectors of structs | `struct PeriodReport` with `PeriodTotals`, `std::vector<ReportCategory>` and `std::vector<MonthFlow>` | `src/core/Reports.h` | One value carries the whole report from the core to the screen | "The page receives one `PeriodReport` and only shows what is in it." |
+| Reading command-line arguments | `app.arguments().indexOf("--database")` | `src/main.cpp` | `Finora.exe --database <file>` opens a demonstration file instead of the real one | "The arguments are a list of strings; the file name is the one after the option." |
 | A process starting a copy of itself | `QProcess::start(QCoreApplication::applicationFilePath(), {"--interrupt-upgrade", path})`, then `kill()` | `tests/InterruptedUpgrade.h` | To test a real power cut, a program must really stop in the middle of a transaction | "The second copy begins an upgrade and is killed before COMMIT; SQLite's journal is left, exactly as after a crash." |
 
 ## Concepts not used yet

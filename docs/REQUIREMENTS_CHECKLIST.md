@@ -2,7 +2,7 @@
 
 This checklist maps every requirement in the professor's project brief, *PF-Project-withRubrics-10Marks.docx*, to Finora. It lists only work that exists in the code. Anything not built yet is marked **Planned — Not Yet Implemented**.
 
-Last updated: Milestone 5, 31 October 2026.
+Last updated: Milestones 6 and 7, 31 October 2026.
 
 ## 1. Objectives from the project brief
 
@@ -54,14 +54,14 @@ Last updated: Milestone 5, 31 October 2026.
 | Business team members, shared workspaces and roles | 4C | **Planned — Not Yet Implemented** (needs Finora Online, a server); marked "Online" in the program |
 | Savings goals with safe contributions and progress | 5 | Done (Finora Plus): `Goal`, `GoalStore` (plan, owner and rules checked in one transaction), the trigger, `GoalsPage`; kept after a downgrade; tested in `finora_tests`, `finora_billing_tests` and `finora_ui_tests` |
 | PKR, USD and EUR with manual exchange rates and documented rounding | 5 | Done (every plan): `ExchangeRates` (4 decimal places as whole numbers, rounding half away from zero, checked multiplication), rates saved per account, `CurrencyPage`; rounding documented in `docs/DESIGN.md` section 13.5 |
-| Reports by period, category and type; CSV export with safe quoting | 6 | **Planned — Not Yet Implemented** |
-| Final testing, documentation, Windows package | 7 | **Planned — Not Yet Implemented** |
+| Reports by period, category and type; CSV export with safe quoting | 6 | Done (Finora Plus): `Reports` (periods, totals, categories, comparisons, CSV text), `ReportExporter::buildReport` and `exportReportCsv` (plan checked before any record is read), `ReportsPage`; totals tested against SQLite's own sums; `docs/DESIGN.md` section 14 |
+| Final testing, documentation, Windows package | 7 | Done: clean builds without warnings, every test program in debug and release, CTest, the DLL check and the packaged program; `docs/MILESTONE6_7_PROGRESS.md`, `docs/DEMO_FINAL.md`, `docs/PRESENTATION_NOTES.md` |
 
 ## 3. Rubric evidence
 
 | Rubric item | Marks | Evidence so far |
 |---|---|---|
 | R1 Project idea, design and creativity | 2 | Problem statement in `README.md`. Architecture, flowcharts, pseudocode, sequence and entity diagrams and the database design in `docs/DESIGN.md`. An original Finora design system with a light and a dark theme, and a dashboard with a chart drawn by Finora itself |
-| R2 C++ implementation, OOP and functionality | 3 | Classes, inheritance and polymorphism (`Page::refresh`, `paintEvent`, the abstract class `PaymentGateway`), structures, an enum, arrays, vectors, loops, `switch`, functions, file handling and a SQLite database with a safe upgrade. No compiler warnings reported. Five automated test programs with 1,168 checks |
+| R2 C++ implementation, OOP and functionality | 3 | Classes, inheritance and polymorphism (`Page::refresh`, `paintEvent`, the abstract class `PaymentGateway`), structures, an enum, arrays, vectors, loops, `switch`, functions, file handling and a SQLite database with a safe upgrade. No compiler warnings reported. Five automated test programs with 1,222 checks |
 | R3 Teamwork, collaboration and professional responsibility | 2 | Individual project. Milestone-by-milestone Git history, honest status labels, licence notices for every outside font and library, and documentation. Ask the instructor how this item is judged for individual work |
-| R4 Academic integrity, learning attitude, engagement and demonstration | 3 | Viva preparation guide and three demonstration guides. Planned features are labelled honestly in the program ("Soon" badges, "Coming in Milestone N") and in the documents |
+| R4 Academic integrity, learning attitude, engagement and demonstration | 3 | Viva preparation guide, presentation notes and four demonstration guides (including the final one). Planned features are labelled honestly in the program ("Soon" badges, "Coming in Milestone N") and in the documents |

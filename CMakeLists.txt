@@ -55,6 +55,7 @@ add_library(finora_core STATIC
     src/core/CsvExport.h      src/core/CsvExport.cpp
     src/core/Goal.h           src/core/Goal.cpp
     src/core/ExchangeRates.h  src/core/ExchangeRates.cpp
+    src/core/Reports.h        src/core/Reports.cpp
 )
 target_include_directories(finora_core PUBLIC src)
 target_compile_options(finora_core PRIVATE ${FINORA_WARNINGS})
@@ -186,6 +187,7 @@ set(FINORA_UI_SOURCES
     src/ui/GoalDialogs.h      src/ui/GoalDialogs.cpp
     src/ui/CurrencyPage.h     src/ui/CurrencyPage.cpp
     src/ui/DatabaseStartup.h  src/ui/DatabaseStartup.cpp
+    src/ui/ReportsPage.h      src/ui/ReportsPage.cpp
 )
 
 # Icons, fonts (with their licences) and the style sheet. They are built

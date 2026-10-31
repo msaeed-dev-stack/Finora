@@ -4,7 +4,7 @@ Questions your Programming Fundamentals instructor may ask about Finora, with an
 
 Features that are not built yet are marked **Planned — Not Yet Implemented**. Never present them as finished.
 
-Last updated: Milestone 5, 31 October 2026.
+Last updated: Milestones 6 and 7, 31 October 2026.
 
 **How to use this file.** Read the short answer first. Then open the file named under "Where in the code" and find the lines yourself. If you cannot explain a line, study it before the viva.
 
@@ -1009,6 +1009,38 @@ The full step-by-step script is in `docs/DEMO_MILESTONE3.md`. In short:
 
 ---
 
+## P. Milestones 6 and 7: Reports, Final Testing and Delivery
+
+### P1. What did Milestone 6 add?
+- **Short answer:** The Reports page (Finora Plus). The person chooses a month or a year, one currency, and which categories to list. Finora shows:
+  - the income, the expenses and the net, each compared with the period before ("PKR 1,500.00 more than September 2026");
+  - every category with its amount, its share and its number of transactions;
+  - month by month: the 6 months up to the month, or the 12 months of the year;
+  - "Export report": the same report as a CSV file.
+- **Reused, not rebuilt:** the CSV quoting (`csvField`), `plainAmount`, `monthlyFlow`, `addChecked`, `requireFeature`. The transactions CSV (Plus) and the monthly PDF (Pro) are unchanged.
+- **Where in the code:** `src/core/Reports.cpp`, `ReportExporter::buildReport` and `exportReportCsv`, `src/ui/ReportsPage.cpp`.
+
+### P2. How do you make sure a report never mixes currencies?
+- **Short answer:** Every report function takes **one** currency code and skips every transaction in another currency. The page only *names* the other currencies that have records in the same period ("Also in October 2026: USD (1 transaction)"); to see them, the person chooses that currency. A test checks that a USD expense never appears in the PKR totals.
+
+### P3. How are the first and last days of a period handled?
+- **Short answer:** `periodBounds` gives the first and last day: `daysInMonth` makes February end on the 28th, or the 29th in a leap year; a year runs from 1 January to 31 December. Dates are `YYYY-MM-DD` text, so `<` and `>` compare them correctly, and both days are included. The tests put records exactly on 30 September, 1 October, 31 October and 1 November.
+
+### P4. How do you know the report totals are right?
+- **Short answer:** A billing test builds the October report and compares it with SQLite's own `SUM(amount_minor)` of the same person's records in the same currency and dates; they are equal. Another check compares the whole transactions table before and after making and exporting reports, to prove reports never change records.
+
+### P5. How is the report file safe?
+- **Short answer:** Category names come from the person, so they go through `csvField`: a comma, a quote or a line break puts the name in quotes with inner quotes doubled, and a name that starts like a formula (`=`, `+`, `-`, `@`) gets a `'` in front, so a spreadsheet shows it as text (protection against "CSV injection"). The file is written with `QSaveFile`, so a failure never leaves half a file.
+
+### P6. Why are reports part of Finora Plus, and how is that enforced?
+- **Short answer:** The plan table lists "Monthly and yearly reports" under Plus. `ReportExporter::buildReport` calls `requireFeature(FEATURE_REPORTS)` **before it reads any record**, so no screen can show a report on Free; the page shows "See plans" instead. A test calls `ReportExporter` directly on Free and it refuses.
+
+### P7. What did Milestone 7 check?
+- **Short answer:** Clean debug and release builds with no compiler warnings; every test program in both builds; CTest; the packaged program's DLLs; the release test programs with only Windows on the PATH; the packaged `Finora.exe` started with `--database` on a separate file; and the real data file's SHA-256 before and after, to prove it was never touched.
+- **`--database <file>`:** an option of `main()` that opens another data file, so the program can be demonstrated or tested without the person's real data.
+
+---
+
 ## Quick Revision
 
 - **Finora:** offline Windows finance app in C++17, Qt 6 Widgets and SQLite; Milestones 1 to 5 are done.
@@ -1035,6 +1067,7 @@ The full step-by-step script is in `docs/DEMO_MILESTONE3.md`. In short:
 - **Accounts:** passwords stored only as Argon2id hashes (libsodium, MODERATE: 256 MiB, 3 passes) with unique salts; identical messages for a wrong password and an unknown email; waiting times after 3 failures; 10 hashed, single-use recovery codes; sessions end after sign-out, 15 idle minutes or 12 hours.
 - **Isolation:** `user_id IS :owner` in every query; the owner comes only from the `Session`, which only `AuthService` (a friend class) can change.
 - **Plans:** Free $0, Plus $5.99, Pro $12.99, Business $24.99 a month (proposed prices). One table of entitlements (`FEATURES`); checks inside `BudgetStore`, `ReportExporter` and `loadAuditHistory`; Free keeps 3 active budgets and pauses the rest; payments are SIMULATED (no card fields, no keys) and a plan switches on only with a succeeded payment of the same person and plan.
-- **Tests:** 392 core, 256 interface, 170 database, 106 account and 244 billing checks (1,168 in total), all passing on Windows on 31 October 2026.
+- **Reports (Plus):** a month or a year, one currency; income, expenses and net compared with the period before; categories with shares; month by month; a CSV file made safe with `csvField`; checked by `requireFeature` inside `ReportExporter`.
+- **Tests:** 423 core, 267 interface, 170 database, 106 account and 256 billing checks (1,222 in total), all passing on Windows on 31 October 2026.
 - **Upgrade consent:** `openDatabaseAtStartup` asks before an older file is upgraded; `DatabaseManager` refuses to upgrade without `setUpgradeAllowed(true)`; after a power cut in the middle of an upgrade, SQLite restores the last saved state and Finora asks again.
-- **Not built yet:** the Reports page, and Business team features (they need Finora Online, a server). Say "planned for Milestone 6" or "needs Finora Online".
+- **Not built yet:** Business team features, real online payments and cloud sync (they need Finora Online, a server), and the Plus and Pro extras marked "Soon" (recurring transactions, advanced filters and analytics). Say "planned" or "needs Finora Online".
