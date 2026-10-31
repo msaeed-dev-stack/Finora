@@ -18,13 +18,13 @@ Finora is a desktop personal finance and budget management application for Windo
 
 | | |
 |---|---|
-| Student name | `[Your Name]` |
-| Roll number | `[Your Roll No.]` |
+| Student name | Muhammad Saeed |
+| Roll number | 26SW142 |
 | Course | Programming Fundamentals (SW112) |
 | Instructor | Mr. Sajjad Ali |
 | Department | Department of Software Engineering, Mehran University of Engineering and Technology, Jamshoro |
 | Semester and year | 1st semester, 1st year |
-| Project type | Individual semester project |
+| Project type | Semester project |
 
 ## Problem statement
 
