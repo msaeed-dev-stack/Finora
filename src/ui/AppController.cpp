@@ -40,7 +40,8 @@ AppController::~AppController()
 void AppController::start()
 {
     // Nobody is signed in yet, so these are the installation's settings.
-    setReducedMotion(database.setting("reduced_motion", "0") == "1");
+    // Reduce motion is on unless "0" (animations on) was saved.
+    setReducedMotion(database.setting("reduced_motion", "1") != "0");
     ThemeMode mode = THEME_LIGHT;
     if (database.setting("theme", "light") == "dark") {
         mode = THEME_DARK;

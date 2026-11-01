@@ -1,0 +1,8 @@
+// Windows resources of Finora.exe.
+//
+// Windows takes the icon of a pinned taskbar button, of a shortcut and of
+// the file in Explorer from the .exe file itself, not from the window. The
+// first icon here is that icon. finora.ico was made from icons/logo.svg
+// at 16, 20, 24, 32, 40, 48, 64, 96, 128 and 256 pixels, so Windows can
+// pick a sharp size for every display scale.
+IDI_ICON1 ICON "icons/finora.ico"

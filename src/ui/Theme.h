@@ -85,6 +85,15 @@ QString fillStyleTemplate(const QString &templateText, const ThemeColors &colors
 void setReducedMotion(bool reduced);
 bool isReducedMotion();
 
+// MainWindow calls this when a page starts to fade in for `durationMs`.
+// The chart and the budget rings start their own animation only after it:
+// while a page fades, Qt keeps one picture of the page, and every step of
+// another animation inside it would make Qt draw the whole page again.
+void notePageFade(int durationMs);
+
+// Milliseconds until the current page fade ends, or 0 if none is running.
+int pageFadeRemaining();
+
 // Loads :/icons/<name>.svg, paints it in `color` and returns a sharp
 // picture of size x size pixels. The icon files draw with "currentColor",
 // which is replaced here, so one file serves every colour and theme.

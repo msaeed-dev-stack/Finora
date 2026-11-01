@@ -6,6 +6,7 @@
 #ifndef FINORA_PROGRESSRING_H
 #define FINORA_PROGRESSRING_H
 
+#include <QTimer>
 #include <QVariantAnimation>
 #include <QWidget>
 
@@ -34,12 +35,14 @@ protected:
 
 private:
     void onAnimationStep(const QVariant &value);
+    void startFilling();
 
     int diameter = 0;
     int percentValue = 0;
     QString toneName = "success";
     double shownFraction = 0.0;   // how much of the ring is drawn now, 0.0 to 1.0
     QVariantAnimation *animation = nullptr;
+    QTimer *startDelay = nullptr;   // waits until a page fade has ended
 };
 
 #endif // FINORA_PROGRESSRING_H

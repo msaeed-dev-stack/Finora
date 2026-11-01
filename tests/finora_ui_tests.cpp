@@ -20,11 +20,13 @@
 #include <QDateEdit>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QGraphicsEffect>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QPropertyAnimation>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QSqlDatabase>
@@ -34,6 +36,7 @@
 #include <QTemporaryDir>
 #include <QTextEdit>
 #include <QTimer>
+#include <QVariantAnimation>
 
 #include <iostream>
 #include <string>
@@ -49,6 +52,7 @@
 #include "core/Transaction.h"
 #include "database/BudgetStore.h"
 #include "database/DatabaseManager.h"
+#include "ui/AccountDialogs.h"
 #include "ui/AppController.h"
 #include "ui/AuthWindow.h"
 #include "ui/AuditHistoryDialog.h"
@@ -914,12 +918,13 @@ void testDashboardAndBudgets(TestCounter &counter, QApplication &app, const QStr
     check(counter, "Settings shows the dark theme as selected", findButton(settings, "Dark")->isChecked());
     saveWindowScreenshot(window, screenshotFolder, "m4_settings_dark");
 
+    // Reduce motion is ticked by default; unticking it turns animations on.
     motionBox->click();
-    check(counter, "Reduce motion turns animations off and is saved",
-          isReducedMotion() && database.setting("reduced_motion", "0") == "1");
-    motionBox->click();
-    check(counter, "turning it off again is saved too",
+    check(counter, "unticking Reduce motion turns animations on and is saved",
           !isReducedMotion() && database.setting("reduced_motion", "1") == "0");
+    motionBox->click();
+    check(counter, "ticking it again turns animations off and is saved too",
+          isReducedMotion() && database.setting("reduced_motion", "0") == "1");
 
     findButton(settings, "Light")->click();
     check(counter, "the Light button in Settings switches back and saves it",
@@ -2106,6 +2111,254 @@ void testReportsPage(TestCounter &counter, QApplication &app, const QString &fol
     auth.signOut("signed_out");
 }
 
+// ---- Polish: the Change password button and the animations -----------------
+
+bool passwordFormOpened = false;       // set when the Change password form appeared
+bool passwordFormButtonFits = false;   // the form's own "Change password" button has its full size
+
+void readPasswordFormAndCancel()
+{
+    ChangePasswordDialog *dialog = qobject_cast<ChangePasswordDialog *>(QApplication::activeModalWidget());
+    if (dialog == nullptr) {
+        return;
+    }
+    passwordFormOpened = true;
+    QPushButton *save = dialog->findChild<QPushButton *>("primaryButton");
+    if (save != nullptr) {
+        passwordFormButtonFits = save->width() >= save->sizeHint().width()
+                                 && save->height() >= save->sizeHint().height();
+    }
+    saveScreenshot(dialog, "polish_change_password_form");
+    findButton(dialog, "Cancel")->click();
+}
+
+// How many pages still have a graphics effect (the page fade's opacity effect).
+int pagesWithEffect(QStackedWidget *pageStack)
+{
+    int count = 0;
+    for (int i = 0; i < pageStack->count(); i++) {
+        if (pageStack->widget(i)->graphicsEffect() != nullptr) {
+            count++;
+        }
+    }
+    return count;
+}
+
+// The longest time, in milliseconds, between two turns of Qt's event loop
+// during `milliseconds`: a blocked interface would show a long gap.
+int longestEventLoopGap(int milliseconds)
+{
+    QElapsedTimer clock;
+    clock.start();
+    qint64 last = 0;
+    qint64 longest = 0;
+    while (clock.elapsed() < milliseconds) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+        qint64 now = clock.elapsed();
+        if (now - last > longest) {
+            longest = now - last;
+        }
+        last = now;
+    }
+    return static_cast<int>(longest);
+}
+
+// Before anyone signs in, Finora uses the setting of the installation.
+// Returns whether Reduce motion is on after a new installation starts.
+bool reducedMotionOnNewInstallation(const QString &databasePath)
+{
+    setReducedMotion(false);   // so only Finora's own start can turn it on
+    Session session;
+    DatabaseManager database("ui_polish_new_installation");
+    database.open(databasePath);
+    database.attachSession(session);
+    PasswordHasher quick(1, 8192);
+    AuthService auth(database, session, quick, quick);
+    AppController controller(database, auth, 600);
+    controller.start();
+    return isReducedMotion();
+}
+
+// Starts Finora again on the polish test's data file, as after closing and
+// opening it: a new connection, the person signs in and a new main window
+// reads the saved choice. The value in memory is first set to the opposite
+// of `expected`, so only the saved choice can pass the check. Before
+// closing, the person clicks Reduce motion once, so the next restart finds
+// the other choice saved.
+bool restartKeepsReducedMotion(const QString &databasePath, const QString &connectionName, bool expected)
+{
+    setReducedMotion(!expected);
+    Session session;
+    DatabaseManager database(connectionName);
+    database.open(databasePath);
+    database.attachSession(session);
+    PasswordHasher quick(1, 8192);
+    AuthService auth(database, session, quick, quick);
+    std::string password = "Correct Horse 9!";
+    if (!auth.signIn("amna@example.com", password)) {
+        return false;
+    }
+    bool kept = false;
+    {
+        MainWindow window(database, &auth);
+        QButtonGroup *navGroup = window.findChild<QButtonGroup *>("navButtonGroup");
+        QCheckBox *motionBox = window.findChild<QCheckBox *>("reducedMotionBox");
+        if (navGroup != nullptr && motionBox != nullptr) {
+            navGroup->button(PAGE_SETTINGS)->click();   // Settings shows the saved choice
+            kept = isReducedMotion() == expected && motionBox->isChecked() == expected;
+            motionBox->click();   // the other choice, for the next restart
+        }
+    }
+    auth.signOut("signed_out");
+    return kept;
+}
+
+void testPolishFixes(TestCounter &counter, QApplication &app, const QString &folder, const QString &screenshotFolder)
+{
+    Session session;
+    DatabaseManager database("ui_polish");
+    database.open(folder + "/ui_polish.db");
+    database.attachSession(session);
+    PasswordHasher quick(1, 8192);
+    AuthService auth(database, session, quick, quick);
+    std::vector<std::string> codes;
+    std::string password = "Correct Horse 9!";
+    auth.signUp("Amna Siddiqui", "amna@example.com", password, codes);
+    Transaction salary = makeTransaction(TYPE_INCOME, 9000000, "PKR", "Salary", "Salary", QDate::currentDate());
+    database.addTransaction(salary);
+
+    MainWindow window(database, &auth);
+    window.resize(1280, 800);
+    window.show();
+    app.processEvents();
+    QButtonGroup *navGroup = window.findChild<QButtonGroup *>("navButtonGroup");
+    QStackedWidget *pageStack = window.findChild<QStackedWidget *>("pageStack");
+    SettingsPage *settings = window.findChild<SettingsPage *>("settingsPage");
+    DashboardPage *dashboard = window.findChild<DashboardPage *>("dashboardPage");
+    if (navGroup == nullptr || pageStack == nullptr || settings == nullptr || dashboard == nullptr) {
+        check(counter, "the main window's pages exist", false);
+        return;
+    }
+
+    // ---- The Change password button ----
+    navGroup->button(PAGE_SETTINGS)->click();
+    waitFor(300);
+    QPushButton *passwordButton = findButton(settings, "Change password");
+    if (passwordButton == nullptr) {
+        check(counter, "the 'Change password' button exists", false);
+        return;
+    }
+    check(counter, "Settings: 'Change password' keeps its full size, so its whole label shows",
+          passwordButton->width() >= passwordButton->sizeHint().width()
+              && passwordButton->height() >= passwordButton->sizeHint().height());
+    // On this wide window, wrapped text once squeezed the Security buttons
+    // to 22 of their 34 pixels. Every button must get its full height.
+    int squeezed = 0;
+    QList<QPushButton *> buttons = settings->findChildren<QPushButton *>();
+    for (int i = 0; i < buttons.size(); i++) {
+        if (buttons[i]->isVisible() && buttons[i]->height() < buttons[i]->sizeHint().height()) {
+            squeezed++;
+            std::cout << "        squeezed: " << buttons[i]->text().toStdString() << " " << buttons[i]->height()
+                      << " of " << buttons[i]->sizeHint().height() << " pixels\n";
+        }
+    }
+    check(counter, "no button on the Settings page is squeezed below its full height", squeezed == 0);
+    saveWindowScreenshot(window, screenshotFolder, "polish_settings_light");
+    passwordFormOpened = false;
+    passwordFormButtonFits = false;
+    QTimer::singleShot(0, readPasswordFormAndCancel);
+    passwordButton->click();
+    check(counter, "it still opens the Change password form, whose own button keeps its full size",
+          passwordFormOpened && passwordFormButtonFits);
+    if (!screenshotFolder.isEmpty()) {
+        window.setDarkTheme(true);   // only for the pictures
+        saveWindowScreenshot(window, screenshotFolder, "polish_settings_dark");
+        window.setDarkTheme(false);
+    }
+
+    // ---- Reduce motion: on by default ----
+    check(counter, "on a new installation, Reduce motion is on before anyone signs in",
+          reducedMotionOnNewInstallation(folder + "/ui_polish_new.db"));
+    QCheckBox *motionBox = settings->findChild<QCheckBox *>("reducedMotionBox");
+    MoneyFlowChart *chart = dashboard->findChild<MoneyFlowChart *>();
+    QVariantAnimation *growing = nullptr;
+    if (chart != nullptr) {
+        growing = chart->findChild<QVariantAnimation *>();
+    }
+    if (motionBox == nullptr || growing == nullptr) {
+        check(counter, "the 'Reduce motion' box and the dashboard chart exist", false);
+        return;
+    }
+    check(counter, "with no saved choice, 'Reduce motion' is ticked, so animations are off",
+          isReducedMotion() && motionBox->isChecked() && database.setting("reduced_motion", "none") == "none");
+
+    // With Reduce motion on, pages appear without a fade, the chart is drawn
+    // at once and nothing starts later.
+    navGroup->button(PAGE_DASHBOARD)->click();
+    check(counter, "pages appear without a fade, and the chart is drawn at once",
+          pagesWithEffect(pageStack) == 0 && growing->state() == QAbstractAnimation::Stopped
+              && pageFadeRemaining() == 0);
+    waitFor(300);
+    check(counter, "and nothing starts later either", growing->state() == QAbstractAnimation::Stopped);
+    for (int pageNumber = 0; pageNumber < PAGE_COUNT; pageNumber++) {
+        navGroup->button(pageNumber)->click();
+    }
+    check(counter, "every page opens with Reduce motion on", pageStack->currentIndex() == PAGE_COUNT - 1);
+
+    // ---- Unticking it turns the animations on, without a restart ----
+    navGroup->button(PAGE_SETTINGS)->click();
+    motionBox->click();
+    check(counter, "unticking 'Reduce motion' turns animations on at once and is saved",
+          !isReducedMotion() && database.setting("reduced_motion", "1") == "0");
+
+    // Quick clicks through four pages: only the page on screen fades, and
+    // when its fade has ended no page keeps an opacity effect.
+    navGroup->button(PAGE_DASHBOARD)->click();
+    navGroup->button(PAGE_TRANSACTIONS)->click();
+    navGroup->button(PAGE_BUDGETS)->click();
+    navGroup->button(PAGE_REPORTS)->click();
+    check(counter, "after four quick clicks, only the page on screen is fading",
+          pagesWithEffect(pageStack) == 1 && pageStack->currentWidget()->graphicsEffect() != nullptr);
+    waitFor(PAGE_FADE_MS + 250);
+    check(counter, "when the fade has ended, no page keeps an opacity effect", pagesWithEffect(pageStack) == 0);
+
+    // The chart waits for the page fade, then grows on its own.
+    navGroup->button(PAGE_DASHBOARD)->click();
+    check(counter, "while the dashboard fades in, the chart's animation waits",
+          growing->state() == QAbstractAnimation::Stopped && pageFadeRemaining() > 0);
+    int gap = longestEventLoopGap(PAGE_FADE_MS + 150);
+    check(counter, "then the bars grow, and Finora keeps handling events (longest pause: "
+                       + std::to_string(gap) + " ms)",
+          growing->state() == QAbstractAnimation::Running && gap < 100);
+    waitFor(700);
+    check(counter, "and the animation finishes by itself",
+          growing->state() == QAbstractAnimation::Stopped && growing->currentTime() == growing->duration());
+
+    // ---- Ticking it again turns them off at once ----
+    navGroup->button(PAGE_SETTINGS)->click();
+    waitFor(PAGE_FADE_MS + 100);
+    motionBox->click();
+    check(counter, "ticking it again turns animations off and is saved",
+          isReducedMotion() && database.setting("reduced_motion", "0") == "1");
+    Toast *toast = window.findChild<Toast *>();
+    QPropertyAnimation *toastFade = nullptr;
+    if (toast != nullptr) {
+        toastFade = toast->findChild<QPropertyAnimation *>();
+    }
+    check(counter, "its message appears at once, without a fade",
+          toastFade != nullptr && toastFade->state() == QAbstractAnimation::Stopped && toast->isVisible());
+    navGroup->button(PAGE_DASHBOARD)->click();
+    check(counter, "pages again appear without a fade", pagesWithEffect(pageStack) == 0 && pageFadeRemaining() == 0);
+    auth.signOut("signed_out");
+
+    // ---- The saved choice is kept after a restart ----
+    QString databasePath = folder + "/ui_polish.db";
+    check(counter, "after a restart, 'Reduce motion' is still ticked, as saved",
+          restartKeepsReducedMotion(databasePath, "ui_polish_restart_1", true));
+    check(counter, "after unticking it and another restart, animations stay on (a saved choice is kept)",
+          restartKeepsReducedMotion(databasePath, "ui_polish_restart_2", false));
+}
+
 // ---- Milestone 5: the start-up question after an interrupted upgrade ----
 
 int upgradeQuestionsAsked = 0;   // how often the start-up question appeared
@@ -2308,6 +2561,9 @@ int main(int argc, char *argv[])
 
     std::cout << "---- Milestone 5: the start-up question after an interrupted upgrade ----\n";
     testStartupAfterInterruptedUpgrade(counter, app, temporaryFolder.path());
+
+    std::cout << "---- Polish: the Change password button and the animations ----\n";
+    testPolishFixes(counter, app, temporaryFolder.path(), screenshotFolder);
 
     std::cout << "----------------------\n";
     std::cout << counter.checksRun << " checks, " << counter.checksFailed << " failed\n";

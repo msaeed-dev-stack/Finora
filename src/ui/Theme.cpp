@@ -4,6 +4,7 @@
 #include "Theme.h"
 
 #include <QDebug>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFont>
 #include <QFontDatabase>
@@ -22,6 +23,8 @@
 static ThemeMode activeMode = THEME_LIGHT;
 static ThemeColors activeColors = lightThemeColors();
 static bool reducedMotion = false;
+static QElapsedTimer pageFadeClock;   // started when a page begins to fade in
+static int pageFadeLength = 0;        // how long that fade lasts, in milliseconds
 
 ThemeColors lightThemeColors()
 {
@@ -263,6 +266,24 @@ void setReducedMotion(bool reduced)
 bool isReducedMotion()
 {
     return reducedMotion;
+}
+
+void notePageFade(int durationMs)
+{
+    pageFadeLength = durationMs;
+    pageFadeClock.start();
+}
+
+int pageFadeRemaining()
+{
+    if (reducedMotion || !pageFadeClock.isValid()) {
+        return 0;
+    }
+    qint64 left = pageFadeLength - pageFadeClock.elapsed();
+    if (left <= 0) {
+        return 0;
+    }
+    return static_cast<int>(left);
 }
 
 QPixmap tintedIcon(const QString &iconName, const QColor &color, int size)

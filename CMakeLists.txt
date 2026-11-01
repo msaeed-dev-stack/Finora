@@ -217,6 +217,7 @@ set(FINORA_RESOURCE_FILES
 qt_add_executable(Finora WIN32
     src/main.cpp
     ${FINORA_UI_SOURCES}
+    resources/finora.rc   # the .exe icon: Explorer, shortcuts and pinned taskbar buttons use it
 )
 qt_add_resources(Finora "finora_resources"
     PREFIX "/"

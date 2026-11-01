@@ -36,6 +36,15 @@ MoneyFlowChart::MoneyFlowChart(QWidget *parent)
     animation->setEndValue(1.0);
     animation->setEasingCurve(QEasingCurve::OutCubic);
     connect(animation, &QVariantAnimation::valueChanged, this, &MoneyFlowChart::onAnimationStep);
+
+    startDelay = new QTimer(this);
+    startDelay->setSingleShot(true);
+    connect(startDelay, &QTimer::timeout, this, &MoneyFlowChart::startGrowing);
+}
+
+void MoneyFlowChart::startGrowing()
+{
+    animation->start();
 }
 
 void MoneyFlowChart::setData(const std::vector<MonthFlow> &flows, const QString &currencyCode)
@@ -47,12 +56,15 @@ void MoneyFlowChart::setData(const std::vector<MonthFlow> &flows, const QString 
     }
 
     // The bars grow from the bottom, unless the user asked for less motion.
+    // They start once a page fade has ended, so each step redraws only the
+    // chart (0 ms: at the next turn of Qt's event loop).
     animation->stop();
+    startDelay->stop();
     if (isReducedMotion()) {
         growth = 1.0;
     } else {
         growth = 0.0;
-        animation->start();
+        startDelay->start(pageFadeRemaining());
     }
 
     setAccessibleDescription(summaryText());

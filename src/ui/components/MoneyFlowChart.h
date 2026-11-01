@@ -11,6 +11,7 @@
 #ifndef FINORA_MONEYFLOWCHART_H
 #define FINORA_MONEYFLOWCHART_H
 
+#include <QTimer>
 #include <QVariantAnimation>
 #include <QWidget>
 
@@ -63,12 +64,14 @@ private:
                  long long scaleMaximum, const QRectF &plot, const QColor &color);
     void drawValueBubble(QPainter &painter, const QRectF &plot, double slotWidth);
     void onAnimationStep(const QVariant &value);
+    void startGrowing();
 
     std::vector<MonthFlow> monthFlows;
     QString currency;
     int highlight = -1;
     double growth = 1.0;   // 0.0 to 1.0 while the bars grow in
     QVariantAnimation *animation = nullptr;
+    QTimer *startDelay = nullptr;   // waits until a page fade has ended
 };
 
 #endif // FINORA_MONEYFLOWCHART_H

@@ -19,6 +19,15 @@ ProgressRing::ProgressRing(int ringDiameter, QWidget *parent)
     animation->setDuration(550);
     animation->setEasingCurve(QEasingCurve::OutCubic);
     connect(animation, &QVariantAnimation::valueChanged, this, &ProgressRing::onAnimationStep);
+
+    startDelay = new QTimer(this);
+    startDelay->setSingleShot(true);
+    connect(startDelay, &QTimer::timeout, this, &ProgressRing::startFilling);
+}
+
+void ProgressRing::startFilling()
+{
+    animation->start();
 }
 
 void ProgressRing::setProgress(int percent, const QString &tone)
@@ -36,14 +45,19 @@ void ProgressRing::setProgress(int percent, const QString &tone)
     }
 
     animation->stop();
+    startDelay->stop();
     if (isReducedMotion()) {
         shownFraction = target;
         update();
         return;
     }
+    // The ring fills once a page fade has ended, so each step redraws only
+    // the ring (0 ms: at the next turn of Qt's event loop).
     animation->setStartValue(0.0);
     animation->setEndValue(target);
-    animation->start();
+    shownFraction = 0.0;
+    update();
+    startDelay->start(pageFadeRemaining());
 }
 
 int ProgressRing::percent() const

@@ -30,6 +30,20 @@
 const int THEME_BUTTON_LIGHT = 0;
 const int THEME_BUTTON_DARK = 1;
 
+// Adds a card to the page. A card is at most 760 pixels wide (see
+// createSection), so it sits in a row with a stretch beside it: Qt then
+// works out the card's height for the width it really gets. Otherwise, on
+// a wide window, text that wraps inside the card would need more height
+// than Qt gave it, and its buttons would be squeezed and cut off.
+void addCard(QVBoxLayout *pageLayout, QFrame *card)
+{
+    QHBoxLayout *row = new QHBoxLayout();
+    row->setContentsMargins(0, 0, 0, 0);
+    row->addWidget(card, 1);
+    row->addStretch();
+    pageLayout->addLayout(row);
+}
+
 SettingsPage::SettingsPage(DatabaseManager &sharedDatabase, AuthService *sharedAuth, QWidget *parent)
     : Page(parent), database(sharedDatabase), auth(sharedAuth)
 {
@@ -44,13 +58,13 @@ SettingsPage::SettingsPage(DatabaseManager &sharedDatabase, AuthService *sharedA
     contentLayout->addWidget(new PageHeader("Settings", "Your account, appearance, data and information about Finora",
                                             content));
     if (auth != nullptr) {
-        contentLayout->addWidget(createProfileCard());
-        contentLayout->addWidget(createSecurityCard());
-        contentLayout->addWidget(createRecordsCard());
+        addCard(contentLayout, createProfileCard());
+        addCard(contentLayout, createSecurityCard());
+        addCard(contentLayout, createRecordsCard());
     }
-    contentLayout->addWidget(createAppearanceCard());
-    contentLayout->addWidget(createDataCard());
-    contentLayout->addWidget(createAboutCard());
+    addCard(contentLayout, createAppearanceCard());
+    addCard(contentLayout, createDataCard());
+    addCard(contentLayout, createAboutCard());
     contentLayout->addStretch();
 
     QScrollArea *scroll = new QScrollArea(this);

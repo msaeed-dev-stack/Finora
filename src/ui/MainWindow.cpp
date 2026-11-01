@@ -69,7 +69,7 @@ MainWindow::MainWindow(DatabaseManager &sharedDatabase, AuthService *sharedAuth,
 
     pageFade = new QPropertyAnimation(this);
     pageFade->setPropertyName("opacity");
-    pageFade->setDuration(180);
+    pageFade->setDuration(PAGE_FADE_MS);
     pageFade->setStartValue(0.35);
     pageFade->setEndValue(1.0);
     connect(pageFade, &QPropertyAnimation::finished, this, &MainWindow::onPageFadeFinished);
@@ -102,6 +102,11 @@ void MainWindow::showPage(int pageNumber)
         return;
     }
 
+    // The fade is announced before refresh(), so the chart and the budget
+    // rings that refresh() starts wait until the page has faded in.
+    if (!isReducedMotion() && isVisible()) {
+        notePageFade(PAGE_FADE_MS);
+    }
     pageStack->setCurrentIndex(pageNumber);   // show the page
     sidebar->setCurrentPage(pageNumber);      // highlight its button
     pages[pageNumber]->refresh();             // virtual call: the page's own refresh()
@@ -184,10 +189,11 @@ void MainWindow::toggleTheme()
 }
 
 // Theme and motion setting saved in the database. A missing or unknown
-// value means the defaults: light theme, animations on.
+// value means the defaults: light theme, reduce motion on. Only a saved
+// "0" (the person unticked Reduce motion) turns the animations on.
 void MainWindow::applySavedAppearance()
 {
-    setReducedMotion(database.setting("reduced_motion", "0") == "1");
+    setReducedMotion(database.setting("reduced_motion", "1") != "0");
 
     ThemeMode mode = THEME_LIGHT;
     if (database.setting("theme", "light") == "dark") {

@@ -21,6 +21,9 @@
 #include "database/BudgetStore.h"
 #include "database/DatabaseManager.h"
 
+// How long a page takes to fade in, in milliseconds.
+const int PAGE_FADE_MS = 180;
+
 class MainWindow : public QMainWindow
 {
     Q_OBJECT   // required because this class has slots
